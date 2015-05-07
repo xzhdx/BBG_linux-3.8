@@ -17,11 +17,9 @@
  *  along with this program; if not, write to the Free Software
  *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
-
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
 #include <linux/device.h>
 #include <linux/hrtimer.h>
+#include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -133,7 +131,7 @@ struct gianfar_ptp_registers {
 #define REG_SIZE	sizeof(struct gianfar_ptp_registers)
 
 struct etsects {
-	struct gianfar_ptp_registers __iomem *regs;
+	struct gianfar_ptp_registers *regs;
 	spinlock_t lock; /* protects regs */
 	struct ptp_clock *clock;
 	struct ptp_clock_info caps;
@@ -322,10 +320,10 @@ static int ptp_gianfar_adjtime(struct ptp_clock_info *ptp, s64 delta)
 	return 0;
 }
 
-static int ptp_gianfar_gettime(struct ptp_clock_info *ptp,
-			       struct timespec64 *ts)
+static int ptp_gianfar_gettime(struct ptp_clock_info *ptp, struct timespec *ts)
 {
 	u64 ns;
+	u32 remainder;
 	unsigned long flags;
 	struct etsects *etsects = container_of(ptp, struct etsects, caps);
 
@@ -335,19 +333,20 @@ static int ptp_gianfar_gettime(struct ptp_clock_info *ptp,
 
 	spin_unlock_irqrestore(&etsects->lock, flags);
 
-	*ts = ns_to_timespec64(ns);
-
+	ts->tv_sec = div_u64_rem(ns, 1000000000, &remainder);
+	ts->tv_nsec = remainder;
 	return 0;
 }
 
 static int ptp_gianfar_settime(struct ptp_clock_info *ptp,
-			       const struct timespec64 *ts)
+			       const struct timespec *ts)
 {
 	u64 ns;
 	unsigned long flags;
 	struct etsects *etsects = container_of(ptp, struct etsects, caps);
 
-	ns = timespec64_to_ns(ts);
+	ns = ts->tv_sec * 1000000000ULL;
+	ns += ts->tv_nsec;
 
 	spin_lock_irqsave(&etsects->lock, flags);
 
@@ -413,12 +412,11 @@ static struct ptp_clock_info ptp_gianfar_caps = {
 	.n_alarm	= 0,
 	.n_ext_ts	= N_EXT_TS,
 	.n_per_out	= 0,
-	.n_pins		= 0,
 	.pps		= 1,
 	.adjfreq	= ptp_gianfar_adjfreq,
 	.adjtime	= ptp_gianfar_adjtime,
-	.gettime64	= ptp_gianfar_gettime,
-	.settime64	= ptp_gianfar_settime,
+	.gettime	= ptp_gianfar_gettime,
+	.settime	= ptp_gianfar_settime,
 	.enable		= ptp_gianfar_enable,
 };
 
@@ -439,7 +437,7 @@ static int gianfar_ptp_probe(struct platform_device *dev)
 {
 	struct device_node *node = dev->dev.of_node;
 	struct etsects *etsects;
-	struct timespec64 now;
+	struct timespec now;
 	int err = -ENOMEM;
 	u32 tmr_ctrl;
 	unsigned long flags;
@@ -451,9 +449,7 @@ static int gianfar_ptp_probe(struct platform_device *dev)
 	err = -ENODEV;
 
 	etsects->caps = ptp_gianfar_caps;
-
-	if (get_of_u32(node, "fsl,cksel", &etsects->cksel))
-		etsects->cksel = DEFAULT_CKSEL;
+	etsects->cksel = DEFAULT_CKSEL;
 
 	if (get_of_u32(node, "fsl,tclk-period", &etsects->tclk_period) ||
 	    get_of_u32(node, "fsl,tmr-prsc", &etsects->tmr_prsc) ||
@@ -494,7 +490,7 @@ static int gianfar_ptp_probe(struct platform_device *dev)
 		pr_err("ioremap ptp registers failed\n");
 		goto no_ioremap;
 	}
-	getnstimeofday64(&now);
+	getnstimeofday(&now);
 	ptp_gianfar_settime(&etsects->caps, &now);
 
 	tmr_ctrl =
@@ -520,12 +516,11 @@ static int gianfar_ptp_probe(struct platform_device *dev)
 	}
 	gfar_phc_index = ptp_clock_index(etsects->clock);
 
-	platform_set_drvdata(dev, etsects);
+	dev_set_drvdata(&dev->dev, etsects);
 
 	return 0;
 
 no_clock:
-	iounmap(etsects->regs);
 no_ioremap:
 	release_resource(etsects->rsrc);
 no_resource:
@@ -538,7 +533,7 @@ no_memory:
 
 static int gianfar_ptp_remove(struct platform_device *dev)
 {
-	struct etsects *etsects = platform_get_drvdata(dev);
+	struct etsects *etsects = dev_get_drvdata(&dev->dev);
 
 	gfar_write(&etsects->regs->tmr_temask, 0);
 	gfar_write(&etsects->regs->tmr_ctrl,   0);
@@ -553,7 +548,7 @@ static int gianfar_ptp_remove(struct platform_device *dev)
 	return 0;
 }
 
-static const struct of_device_id match_table[] = {
+static struct of_device_id match_table[] = {
 	{ .compatible = "fsl,etsec-ptp" },
 	{},
 };
@@ -562,6 +557,7 @@ static struct platform_driver gianfar_ptp_driver = {
 	.driver = {
 		.name		= "gianfar_ptp",
 		.of_match_table	= match_table,
+		.owner		= THIS_MODULE,
 	},
 	.probe       = gianfar_ptp_probe,
 	.remove      = gianfar_ptp_remove,

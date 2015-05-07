@@ -27,13 +27,12 @@
 #include <linux/amba/mmci.h>
 #include <linux/amba/pl022.h>
 #include <linux/io.h>
-#include <linux/irqchip/arm-gic.h>
 #include <linux/platform_data/clk-realview.h>
-#include <linux/reboot.h>
 
 #include <asm/irq.h>
 #include <asm/mach-types.h>
 #include <asm/pgtable.h>
+#include <asm/hardware/gic.h>
 
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
@@ -240,7 +239,7 @@ static struct resource pmu_resource = {
 };
 
 static struct platform_device pmu_device = {
-	.name			= "armv7-pmu",
+	.name			= "arm-pmu",
 	.id			= -1,
 	.num_resources		= 1,
 	.resource		= &pmu_resource,
@@ -265,7 +264,11 @@ static void __init realview_pba8_timer_init(void)
 	realview_timer_init(IRQ_PBA8_TIMER0_1);
 }
 
-static void realview_pba8_restart(enum reboot_mode mode, const char *cmd)
+static struct sys_timer realview_pba8_timer = {
+	.init		= realview_pba8_timer_init,
+};
+
+static void realview_pba8_restart(char mode, const char *cmd)
 {
 	void __iomem *reset_ctrl = __io_address(REALVIEW_SYS_RESETCTL);
 	void __iomem *lock_ctrl = __io_address(REALVIEW_SYS_LOCK);
@@ -289,7 +292,6 @@ static void __init realview_pba8_init(void)
 	realview_eth_register(NULL, realview_pba8_smsc911x_resources);
 	platform_device_register(&realview_i2c_device);
 	platform_device_register(&realview_cf_device);
-	platform_device_register(&realview_leds_device);
 	realview_usb_register(realview_pba8_isp1761_resources);
 	platform_device_register(&pmu_device);
 
@@ -306,7 +308,8 @@ MACHINE_START(REALVIEW_PBA8, "ARM-RealView PB-A8")
 	.map_io		= realview_pba8_map_io,
 	.init_early	= realview_init_early,
 	.init_irq	= gic_init_irq,
-	.init_time	= realview_pba8_timer_init,
+	.timer		= &realview_pba8_timer,
+	.handle_irq	= gic_handle_irq,
 	.init_machine	= realview_pba8_init,
 #ifdef CONFIG_ZONE_DMA
 	.dma_zone_size	= SZ_256M,

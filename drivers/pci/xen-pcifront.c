@@ -20,7 +20,6 @@
 #include <linux/workqueue.h>
 #include <linux/bitops.h>
 #include <linux/time.h>
-#include <xen/platform_pci.h>
 
 #include <asm/xen/swiotlb-xen.h>
 #define INVALID_GRANT_REF (0)
@@ -472,15 +471,12 @@ static int pcifront_scan_root(struct pcifront_device *pdev,
 	}
 	pcifront_init_sd(sd, domain, bus, pdev);
 
-	pci_lock_rescan_remove();
-
 	b = pci_scan_bus_parented(&pdev->xdev->dev, bus,
 				  &pcifront_bus_ops, sd);
 	if (!b) {
 		dev_err(&pdev->xdev->dev,
 			"Error creating PCI Frontend Bus!\n");
 		err = -ENOMEM;
-		pci_unlock_rescan_remove();
 		goto err_out;
 	}
 
@@ -498,7 +494,6 @@ static int pcifront_scan_root(struct pcifront_device *pdev,
 	/* Create SysFS and notify udev of the devices. Aka: "going live" */
 	pci_bus_add_devices(b);
 
-	pci_unlock_rescan_remove();
 	return err;
 
 err_out:
@@ -561,7 +556,6 @@ static void pcifront_free_roots(struct pcifront_device *pdev)
 
 	dev_dbg(&pdev->xdev->dev, "cleaning up root buses\n");
 
-	pci_lock_rescan_remove();
 	list_for_each_entry_safe(bus_entry, t, &pdev->root_buses, list) {
 		list_del(&bus_entry->list);
 
@@ -574,7 +568,6 @@ static void pcifront_free_roots(struct pcifront_device *pdev)
 
 		kfree(bus_entry);
 	}
-	pci_unlock_rescan_remove();
 }
 
 static pci_ers_result_t pcifront_common_process(int cmd,
@@ -596,7 +589,8 @@ static pci_ers_result_t pcifront_common_process(int cmd,
 	pcidev = pci_get_bus_and_slot(bus, devfn);
 	if (!pcidev || !pcidev->driver) {
 		dev_err(&pdev->xdev->dev, "device or AER driver is NULL\n");
-		pci_dev_put(pcidev);
+		if (pcidev)
+			pci_dev_put(pcidev);
 		return result;
 	}
 	pdrv = pcidev->driver;
@@ -661,9 +655,9 @@ static void pcifront_do_aer(struct work_struct *data)
 	notify_remote_via_evtchn(pdev->evtchn);
 
 	/*in case of we lost an aer request in four lines time_window*/
-	smp_mb__before_atomic();
+	smp_mb__before_clear_bit();
 	clear_bit(_PDEVB_op_active, &pdev->flags);
-	smp_mb__after_atomic();
+	smp_mb__after_clear_bit();
 
 	schedule_pcifront_aer_op(pdev);
 
@@ -684,9 +678,10 @@ static int pcifront_connect_and_init_dma(struct pcifront_device *pdev)
 	if (!pcifront_dev) {
 		dev_info(&pdev->xdev->dev, "Installing PCI frontend\n");
 		pcifront_dev = pdev;
-	} else
+	} else {
+		dev_err(&pdev->xdev->dev, "PCI frontend already installed!\n");
 		err = -EEXIST;
-
+	}
 	spin_unlock(&pcifront_dev_lock);
 
 	if (!err && !swiotlb_nr_tbl()) {
@@ -777,13 +772,12 @@ static int pcifront_publish_info(struct pcifront_device *pdev)
 {
 	int err = 0;
 	struct xenbus_transaction trans;
-	grant_ref_t gref;
 
-	err = xenbus_grant_ring(pdev->xdev, pdev->sh_info, 1, &gref);
+	err = xenbus_grant_ring(pdev->xdev, virt_to_mfn(pdev->sh_info));
 	if (err < 0)
 		goto out;
 
-	pdev->gnt_ref = gref;
+	pdev->gnt_ref = err;
 
 	err = xenbus_alloc_evtchn(pdev->xdev, &pdev->evtchn);
 	if (err)
@@ -854,7 +848,7 @@ static int pcifront_try_connect(struct pcifront_device *pdev)
 		goto out;
 
 	err = pcifront_connect_and_init_dma(pdev);
-	if (err && err != -EEXIST) {
+	if (err) {
 		xenbus_dev_fatal(pdev->xdev, err,
 				 "Error setting up PCI Frontend");
 		goto out;
@@ -866,11 +860,6 @@ static int pcifront_try_connect(struct pcifront_device *pdev)
 		xenbus_dev_error(pdev->xdev, err,
 				 "No PCI Roots found, trying 0000:00");
 		err = pcifront_scan_root(pdev, 0, 0);
-		if (err) {
-			xenbus_dev_fatal(pdev->xdev, err,
-					 "Error scanning PCI root 0000:00");
-			goto out;
-		}
 		num_roots = 0;
 	} else if (err != 1) {
 		if (err == 0)
@@ -952,11 +941,6 @@ static int pcifront_attach_devices(struct pcifront_device *pdev)
 		xenbus_dev_error(pdev->xdev, err,
 				 "No PCI Roots found, trying 0000:00");
 		err = pcifront_rescan_root(pdev, 0, 0);
-		if (err) {
-			xenbus_dev_fatal(pdev->xdev, err,
-					 "Error scanning PCI root 0000:00");
-			goto out;
-		}
 		num_roots = 0;
 	} else if (err != 1) {
 		if (err == 0)
@@ -1060,10 +1044,8 @@ static int pcifront_detach_devices(struct pcifront_device *pdev)
 				domain, bus, slot, func);
 			continue;
 		}
-		pci_lock_rescan_remove();
 		pci_stop_and_remove_bus_device(pci_dev);
 		pci_dev_put(pci_dev);
-		pci_unlock_rescan_remove();
 
 		dev_dbg(&pdev->xdev->dev,
 			"PCI device %04x:%02x:%02x.%d removed.\n",
@@ -1146,20 +1128,15 @@ static const struct xenbus_device_id xenpci_ids[] = {
 	{""},
 };
 
-static struct xenbus_driver xenpci_driver = {
-	.name			= "pcifront",
-	.ids			= xenpci_ids,
+static DEFINE_XENBUS_DRIVER(xenpci, "pcifront",
 	.probe			= pcifront_xenbus_probe,
 	.remove			= pcifront_xenbus_remove,
 	.otherend_changed	= pcifront_backend_changed,
-};
+);
 
 static int __init pcifront_init(void)
 {
 	if (!xen_pv_domain() || xen_initial_domain())
-		return -ENODEV;
-
-	if (!xen_has_pv_devices())
 		return -ENODEV;
 
 	pci_frontend_registrar(1 /* enable */);

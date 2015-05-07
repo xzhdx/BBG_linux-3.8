@@ -18,9 +18,7 @@ typedef struct {
 #endif
 
 	struct mutex lock;
-	void __user *vdso;
-
-	atomic_t perf_rdpmc_allowed;	/* nonzero if rdpmc is allowed */
+	void *vdso;
 } mm_context_t;
 
 #ifdef CONFIG_SMP

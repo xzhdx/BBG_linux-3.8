@@ -11,7 +11,6 @@
 #include <linux/irq.h>
 #include <linux/io.h>
 #include <linux/mtd/partitions.h>
-#include <linux/smc91x.h>
 
 #include <mach/hardware.h>
 #include <asm/setup.h>
@@ -44,18 +43,12 @@ static struct resource smc91x_resources[] = {
 #endif
 };
 
-static struct smc91x_platdata smc91x_platdata = {
-	.flags = SMC91X_USE_16BIT | SMC91X_NOWAIT,
-};
 
 static struct platform_device smc91x_device = {
 	.name		= "smc91x",
 	.id		= 0,
 	.num_resources	= ARRAY_SIZE(smc91x_resources),
 	.resource	= smc91x_resources,
-	.dev = {
-		.platform_data  = &smc91x_platdata,
-	},
 };
 
 static struct platform_device *devices[] __initdata = {
@@ -140,7 +133,7 @@ MACHINE_START(PLEB, "PLEB")
 	.map_io		= pleb_map_io,
 	.nr_irqs	= SA1100_NR_IRQS,
 	.init_irq	= sa1100_init_irq,
-	.init_time	= sa1100_timer_init,
+	.timer		= &sa1100_timer,
 	.init_machine   = pleb_init,
 	.init_late	= sa11x0_init_late,
 	.restart	= sa11x0_restart,

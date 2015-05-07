@@ -5,6 +5,7 @@
 #include <linux/bootmem.h>
 #include <linux/crash_dump.h>
 #include <linux/delay.h>
+#include <linux/init.h>
 #include <linux/irq.h>
 #include <linux/types.h>
 #include <linux/sched.h>
@@ -25,9 +26,9 @@ static void crash_shutdown_secondary(void *ignore)
 		return;
 
 	local_irq_disable();
-	if (!cpumask_test_cpu(cpu, &cpus_in_crash))
+	if (!cpu_isset(cpu, cpus_in_crash))
 		crash_save_cpu(regs, cpu);
-	cpumask_set_cpu(cpu, &cpus_in_crash);
+	cpu_set(cpu, cpus_in_crash);
 
 	while (!atomic_read(&kexec_ready_to_reboot))
 		cpu_relax();
@@ -50,7 +51,7 @@ static void crash_kexec_prepare_cpus(void)
 	 */
 	pr_emerg("Sending IPI to other cpus...\n");
 	msecs = 10000;
-	while ((cpumask_weight(&cpus_in_crash) < ncpus) && (--msecs > 0)) {
+	while ((cpus_weight(cpus_in_crash) < ncpus) && (--msecs > 0)) {
 		cpu_relax();
 		mdelay(1);
 	}
@@ -58,7 +59,7 @@ static void crash_kexec_prepare_cpus(void)
 
 #else /* !defined(CONFIG_SMP)  */
 static void crash_kexec_prepare_cpus(void) {}
-#endif /* !defined(CONFIG_SMP)	*/
+#endif /* !defined(CONFIG_SMP)  */
 
 void default_machine_crash_shutdown(struct pt_regs *regs)
 {
@@ -66,5 +67,5 @@ void default_machine_crash_shutdown(struct pt_regs *regs)
 	crashing_cpu = smp_processor_id();
 	crash_save_cpu(regs, crashing_cpu);
 	crash_kexec_prepare_cpus();
-	cpumask_set_cpu(crashing_cpu, &cpus_in_crash);
+	cpu_set(crashing_cpu, cpus_in_crash);
 }

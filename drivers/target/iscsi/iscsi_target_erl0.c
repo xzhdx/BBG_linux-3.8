@@ -2,7 +2,9 @@
  * This file contains error recovery level zero functions used by
  * the iSCSI Target driver.
  *
- * (c) Copyright 2007-2013 Datera, Inc.
+ * \u00a9 Copyright 2007-2011 RisingTide Systems LLC.
+ *
+ * Licensed to the Linux Foundation under the General Public License (GPL) version 2.
  *
  * Author: Nicholas A. Bellinger <nab@linux-iscsi.org>
  *
@@ -21,8 +23,9 @@
 #include <target/target_core_base.h>
 #include <target/target_core_fabric.h>
 
-#include <target/iscsi/iscsi_target_core.h>
+#include "iscsi_target_core.h"
 #include "iscsi_target_seq_pdu_list.h"
+#include "iscsi_target_tq.h"
 #include "iscsi_target_erl0.h"
 #include "iscsi_target_erl1.h"
 #include "iscsi_target_erl2.h"
@@ -344,6 +347,7 @@ static int iscsit_dataout_check_datasn(
 	struct iscsi_cmd *cmd,
 	unsigned char *buf)
 {
+	int dump = 0, recovery = 0;
 	u32 data_sn = 0;
 	struct iscsi_conn *conn = cmd->conn;
 	struct iscsi_data *hdr = (struct iscsi_data *) buf;
@@ -368,11 +372,13 @@ static int iscsit_dataout_check_datasn(
 		pr_err("Command ITT: 0x%08x, received DataSN: 0x%08x"
 			" higher than expected 0x%08x.\n", cmd->init_task_tag,
 				be32_to_cpu(hdr->datasn), data_sn);
+		recovery = 1;
 		goto recover;
 	} else if (be32_to_cpu(hdr->datasn) < data_sn) {
 		pr_err("Command ITT: 0x%08x, received DataSN: 0x%08x"
 			" lower than expected 0x%08x, discarding payload.\n",
 			cmd->init_task_tag, be32_to_cpu(hdr->datasn), data_sn);
+		dump = 1;
 		goto dump;
 	}
 
@@ -388,7 +394,8 @@ dump:
 	if (iscsit_dump_data_payload(conn, payload_length, 1) < 0)
 		return DATAOUT_CANNOT_RECOVER;
 
-	return DATAOUT_WITHIN_COMMAND_RECOVERY;
+	return (recovery || dump) ? DATAOUT_WITHIN_COMMAND_RECOVERY :
+				DATAOUT_NORMAL;
 }
 
 static int iscsit_dataout_pre_datapduinorder_yes(
@@ -739,12 +746,13 @@ int iscsit_check_post_dataout(
 		if (!conn->sess->sess_ops->ErrorRecoveryLevel) {
 			pr_err("Unable to recover from DataOUT CRC"
 				" failure while ERL=0, closing session.\n");
-			iscsit_reject_cmd(cmd, ISCSI_REASON_DATA_DIGEST_ERROR,
-					  buf);
+			iscsit_add_reject_from_cmd(ISCSI_REASON_DATA_DIGEST_ERROR,
+					1, 0, buf, cmd);
 			return DATAOUT_CANNOT_RECOVER;
 		}
 
-		iscsit_reject_cmd(cmd, ISCSI_REASON_DATA_DIGEST_ERROR, buf);
+		iscsit_add_reject_from_cmd(ISCSI_REASON_DATA_DIGEST_ERROR,
+				0, 0, buf, cmd);
 		return iscsit_dataout_post_crc_failed(cmd, buf);
 	}
 }
@@ -752,7 +760,7 @@ int iscsit_check_post_dataout(
 static void iscsit_handle_time2retain_timeout(unsigned long data)
 {
 	struct iscsi_session *sess = (struct iscsi_session *) data;
-	struct iscsi_portal_group *tpg = sess->tpg;
+	struct iscsi_portal_group *tpg = ISCSI_TPG_S(sess);
 	struct se_portal_group *se_tpg = &tpg->tpg_se_tpg;
 
 	spin_lock_bh(&se_tpg->session_lock);
@@ -780,7 +788,7 @@ static void iscsit_handle_time2retain_timeout(unsigned long data)
 		tiqn->sess_err_stats.last_sess_failure_type =
 				ISCSI_SESS_ERR_CXN_TIMEOUT;
 		tiqn->sess_err_stats.cxn_timeout_errors++;
-		atomic_long_inc(&sess->conn_timeout_errors);
+		sess->conn_timeout_errors++;
 		spin_unlock(&tiqn->sess_err_stats.lock);
 	}
 	}
@@ -796,9 +804,9 @@ void iscsit_start_time2retain_handler(struct iscsi_session *sess)
 	 * Only start Time2Retain timer when the associated TPG is still in
 	 * an ACTIVE (eg: not disabled or shutdown) state.
 	 */
-	spin_lock(&sess->tpg->tpg_state_lock);
-	tpg_active = (sess->tpg->tpg_state == TPG_STATE_ACTIVE);
-	spin_unlock(&sess->tpg->tpg_state_lock);
+	spin_lock(&ISCSI_TPG_S(sess)->tpg_state_lock);
+	tpg_active = (ISCSI_TPG_S(sess)->tpg_state == TPG_STATE_ACTIVE);
+	spin_unlock(&ISCSI_TPG_S(sess)->tpg_state_lock);
 
 	if (!tpg_active)
 		return;
@@ -824,7 +832,7 @@ void iscsit_start_time2retain_handler(struct iscsi_session *sess)
  */
 int iscsit_stop_time2retain_timer(struct iscsi_session *sess)
 {
-	struct iscsi_portal_group *tpg = sess->tpg;
+	struct iscsi_portal_group *tpg = ISCSI_TPG_S(sess);
 	struct se_portal_group *se_tpg = &tpg->tpg_se_tpg;
 
 	if (sess->time2retain_timer_flags & ISCSI_TF_EXPIRED)
@@ -834,11 +842,11 @@ int iscsit_stop_time2retain_timer(struct iscsi_session *sess)
 		return 0;
 
 	sess->time2retain_timer_flags |= ISCSI_TF_STOP;
-	spin_unlock(&se_tpg->session_lock);
+	spin_unlock_bh(&se_tpg->session_lock);
 
 	del_timer_sync(&sess->time2retain_timer);
 
-	spin_lock(&se_tpg->session_lock);
+	spin_lock_bh(&se_tpg->session_lock);
 	sess->time2retain_timer_flags &= ~ISCSI_TF_RUNNING;
 	pr_debug("Stopped Time2Retain Timer for SID: %u\n",
 			sess->sid);
@@ -859,10 +867,7 @@ void iscsit_connection_reinstatement_rcfr(struct iscsi_conn *conn)
 	}
 	spin_unlock_bh(&conn->state_lock);
 
-	if (conn->tx_thread && conn->tx_thread_active)
-		send_sig(SIGINT, conn->tx_thread, 1);
-	if (conn->rx_thread && conn->rx_thread_active)
-		send_sig(SIGINT, conn->rx_thread, 1);
+	iscsi_thread_set_force_reinstatement(conn);
 
 sleep:
 	wait_for_completion(&conn->conn_wait_rcfr_comp);
@@ -887,10 +892,10 @@ void iscsit_cause_connection_reinstatement(struct iscsi_conn *conn, int sleep)
 		return;
 	}
 
-	if (conn->tx_thread && conn->tx_thread_active)
-		send_sig(SIGINT, conn->tx_thread, 1);
-	if (conn->rx_thread && conn->rx_thread_active)
-		send_sig(SIGINT, conn->rx_thread, 1);
+	if (iscsi_thread_set_force_reinstatement(conn) < 0) {
+		spin_unlock_bh(&conn->state_lock);
+		return;
+	}
 
 	atomic_set(&conn->connection_reinstatement, 1);
 	if (!sleep) {
@@ -904,7 +909,6 @@ void iscsit_cause_connection_reinstatement(struct iscsi_conn *conn, int sleep)
 	wait_for_completion(&conn->conn_wait_comp);
 	complete(&conn->conn_post_wait_comp);
 }
-EXPORT_SYMBOL(iscsit_cause_connection_reinstatement);
 
 void iscsit_fall_back_to_erl0(struct iscsi_session *sess)
 {

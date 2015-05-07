@@ -90,7 +90,6 @@ void show_regs(struct pt_regs *regs)
 {
 	extern void show_registers(struct pt_regs *regs);
 
-	show_regs_print_info(KERN_DEFAULT);
 	/* __PHX__ cleanup this mess */
 	show_registers(regs);
 }
@@ -197,6 +196,7 @@ void start_thread(struct pt_regs *regs, unsigned long pc, unsigned long sp)
 {
 	unsigned long sr = mfspr(SPR_SR) & ~SPR_SR_SM;
 
+	set_fs(USER_DS);
 	memset(regs, 0, sizeof(struct pt_regs));
 
 	regs->pc = pc;

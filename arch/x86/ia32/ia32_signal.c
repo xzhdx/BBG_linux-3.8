@@ -34,7 +34,9 @@
 #include <asm/sys_ia32.h>
 #include <asm/smap.h>
 
-int copy_siginfo_to_user32(compat_siginfo_t __user *to, const siginfo_t *from)
+#define FIX_EFLAGS	__FIX_EFLAGS
+
+int copy_siginfo_to_user32(compat_siginfo_t __user *to, siginfo_t *from)
 {
 	int err = 0;
 	bool ia32 = test_thread_flag(TIF_IA32);
@@ -127,6 +129,13 @@ int copy_siginfo_from_user32(siginfo_t *to, compat_siginfo_t __user *from)
 	return err;
 }
 
+asmlinkage long sys32_sigsuspend(int history0, int history1, old_sigset_t mask)
+{
+	sigset_t blocked;
+	siginitset(&blocked, mask);
+	return sigsuspend(&blocked);
+}
+
 /*
  * Do a signal return; undo the signal stack.
  */
@@ -161,14 +170,15 @@ int copy_siginfo_from_user32(siginfo_t *to, compat_siginfo_t __user *from)
 }
 
 static int ia32_restore_sigcontext(struct pt_regs *regs,
-				   struct sigcontext_ia32 __user *sc)
+				   struct sigcontext_ia32 __user *sc,
+				   unsigned int *pax)
 {
 	unsigned int tmpflags, err = 0;
 	void __user *buf;
 	u32 tmp;
 
 	/* Always make any pending restarted system calls return -EINTR */
-	current->restart_block.fn = do_no_restart_syscall;
+	current_thread_info()->restart_block.fn = do_no_restart_syscall;
 
 	get_user_try {
 		/*
@@ -183,7 +193,7 @@ static int ia32_restore_sigcontext(struct pt_regs *regs,
 		RELOAD_SEG(es);
 
 		COPY(di); COPY(si); COPY(bp); COPY(sp); COPY(bx);
-		COPY(dx); COPY(cx); COPY(ip); COPY(ax);
+		COPY(dx); COPY(cx); COPY(ip);
 		/* Don't touch extended registers */
 
 		COPY_SEG_CPL3(cs);
@@ -196,20 +206,20 @@ static int ia32_restore_sigcontext(struct pt_regs *regs,
 
 		get_user_ex(tmp, &sc->fpstate);
 		buf = compat_ptr(tmp);
+
+		get_user_ex(*pax, &sc->ax);
 	} get_user_catch(err);
 
 	err |= restore_xstate_sig(buf, 1);
 
-	force_iret();
-
 	return err;
 }
 
-asmlinkage long sys32_sigreturn(void)
+asmlinkage long sys32_sigreturn(struct pt_regs *regs)
 {
-	struct pt_regs *regs = current_pt_regs();
 	struct sigframe_ia32 __user *frame = (struct sigframe_ia32 __user *)(regs->sp-8);
 	sigset_t set;
+	unsigned int ax;
 
 	if (!access_ok(VERIFY_READ, frame, sizeof(*frame)))
 		goto badframe;
@@ -222,20 +232,20 @@ asmlinkage long sys32_sigreturn(void)
 
 	set_current_blocked(&set);
 
-	if (ia32_restore_sigcontext(regs, &frame->sc))
+	if (ia32_restore_sigcontext(regs, &frame->sc, &ax))
 		goto badframe;
-	return regs->ax;
+	return ax;
 
 badframe:
 	signal_fault(regs, frame, "32bit sigreturn");
 	return 0;
 }
 
-asmlinkage long sys32_rt_sigreturn(void)
+asmlinkage long sys32_rt_sigreturn(struct pt_regs *regs)
 {
-	struct pt_regs *regs = current_pt_regs();
 	struct rt_sigframe_ia32 __user *frame;
 	sigset_t set;
+	unsigned int ax;
 
 	frame = (struct rt_sigframe_ia32 __user *)(regs->sp - 4);
 
@@ -246,13 +256,13 @@ asmlinkage long sys32_rt_sigreturn(void)
 
 	set_current_blocked(&set);
 
-	if (ia32_restore_sigcontext(regs, &frame->uc.uc_mcontext))
+	if (ia32_restore_sigcontext(regs, &frame->uc.uc_mcontext, &ax))
 		goto badframe;
 
 	if (compat_restore_altstack(&frame->uc.uc_stack))
 		goto badframe;
 
-	return regs->ax;
+	return ax;
 
 badframe:
 	signal_fault(regs, frame, "32bit rt sigreturn");
@@ -304,7 +314,7 @@ static int ia32_setup_sigcontext(struct sigcontext_ia32 __user *sc,
 /*
  * Determine which stack to use..
  */
-static void __user *get_sigframe(struct ksignal *ksig, struct pt_regs *regs,
+static void __user *get_sigframe(struct k_sigaction *ka, struct pt_regs *regs,
 				 size_t frame_size,
 				 void __user **fpstate)
 {
@@ -314,13 +324,16 @@ static void __user *get_sigframe(struct ksignal *ksig, struct pt_regs *regs,
 	sp = regs->sp;
 
 	/* This is the X/Open sanctioned signal stack switching.  */
-	if (ksig->ka.sa.sa_flags & SA_ONSTACK)
-		sp = sigsp(sp, ksig);
+	if (ka->sa.sa_flags & SA_ONSTACK) {
+		if (sas_ss_flags(sp) == 0)
+			sp = current->sas_ss_sp + current->sas_ss_size;
+	}
+
 	/* This is the legacy signal stack switching. */
 	else if ((regs->ss & 0xffff) != __USER32_DS &&
-		!(ksig->ka.sa.sa_flags & SA_RESTORER) &&
-		 ksig->ka.sa.sa_restorer)
-		sp = (unsigned long) ksig->ka.sa.sa_restorer;
+		!(ka->sa.sa_flags & SA_RESTORER) &&
+		 ka->sa.sa_restorer)
+		sp = (unsigned long) ka->sa.sa_restorer;
 
 	if (used_math()) {
 		unsigned long fx_aligned, math_size;
@@ -339,7 +352,7 @@ static void __user *get_sigframe(struct ksignal *ksig, struct pt_regs *regs,
 	return (void __user *) sp;
 }
 
-int ia32_setup_frame(int sig, struct ksignal *ksig,
+int ia32_setup_frame(int sig, struct k_sigaction *ka,
 		     compat_sigset_t *set, struct pt_regs *regs)
 {
 	struct sigframe_ia32 __user *frame;
@@ -358,7 +371,7 @@ int ia32_setup_frame(int sig, struct ksignal *ksig,
 		0x80cd,		/* int $0x80 */
 	};
 
-	frame = get_sigframe(ksig, regs, sizeof(*frame), &fpstate);
+	frame = get_sigframe(ka, regs, sizeof(*frame), &fpstate);
 
 	if (!access_ok(VERIFY_WRITE, frame, sizeof(*frame)))
 		return -EFAULT;
@@ -375,13 +388,13 @@ int ia32_setup_frame(int sig, struct ksignal *ksig,
 			return -EFAULT;
 	}
 
-	if (ksig->ka.sa.sa_flags & SA_RESTORER) {
-		restorer = ksig->ka.sa.sa_restorer;
+	if (ka->sa.sa_flags & SA_RESTORER) {
+		restorer = ka->sa.sa_restorer;
 	} else {
 		/* Return stub is in 32bit vsyscall page */
 		if (current->mm->context.vdso)
-			restorer = current->mm->context.vdso +
-				selected_vdso32->sym___kernel_sigreturn;
+			restorer = VDSO32_SYMBOL(current->mm->context.vdso,
+						 sigreturn);
 		else
 			restorer = &frame->retcode;
 	}
@@ -401,7 +414,7 @@ int ia32_setup_frame(int sig, struct ksignal *ksig,
 
 	/* Set up registers for signal handler */
 	regs->sp = (unsigned long) frame;
-	regs->ip = (unsigned long) ksig->ka.sa.sa_handler;
+	regs->ip = (unsigned long) ka->sa.sa_handler;
 
 	/* Make -mregparm=3 work */
 	regs->ax = sig;
@@ -417,7 +430,7 @@ int ia32_setup_frame(int sig, struct ksignal *ksig,
 	return 0;
 }
 
-int ia32_setup_rt_frame(int sig, struct ksignal *ksig,
+int ia32_setup_rt_frame(int sig, struct k_sigaction *ka, siginfo_t *info,
 			compat_sigset_t *set, struct pt_regs *regs)
 {
 	struct rt_sigframe_ia32 __user *frame;
@@ -438,7 +451,7 @@ int ia32_setup_rt_frame(int sig, struct ksignal *ksig,
 		0,
 	};
 
-	frame = get_sigframe(ksig, regs, sizeof(*frame), &fpstate);
+	frame = get_sigframe(ka, regs, sizeof(*frame), &fpstate);
 
 	if (!access_ok(VERIFY_WRITE, frame, sizeof(*frame)))
 		return -EFAULT;
@@ -454,13 +467,13 @@ int ia32_setup_rt_frame(int sig, struct ksignal *ksig,
 		else
 			put_user_ex(0, &frame->uc.uc_flags);
 		put_user_ex(0, &frame->uc.uc_link);
-		compat_save_altstack_ex(&frame->uc.uc_stack, regs->sp);
+		err |= __compat_save_altstack(&frame->uc.uc_stack, regs->sp);
 
-		if (ksig->ka.sa.sa_flags & SA_RESTORER)
-			restorer = ksig->ka.sa.sa_restorer;
+		if (ka->sa.sa_flags & SA_RESTORER)
+			restorer = ka->sa.sa_restorer;
 		else
-			restorer = current->mm->context.vdso +
-				selected_vdso32->sym___kernel_rt_sigreturn;
+			restorer = VDSO32_SYMBOL(current->mm->context.vdso,
+						 rt_sigreturn);
 		put_user_ex(ptr_to_compat(restorer), &frame->pretcode);
 
 		/*
@@ -470,7 +483,7 @@ int ia32_setup_rt_frame(int sig, struct ksignal *ksig,
 		put_user_ex(*((u64 *)&code), (u64 __user *)frame->retcode);
 	} put_user_catch(err);
 
-	err |= copy_siginfo_to_user32(&frame->info, &ksig->info);
+	err |= copy_siginfo_to_user32(&frame->info, info);
 	err |= ia32_setup_sigcontext(&frame->uc.uc_mcontext, fpstate,
 				     regs, set->sig[0]);
 	err |= __copy_to_user(&frame->uc.uc_sigmask, set, sizeof(*set));
@@ -480,7 +493,7 @@ int ia32_setup_rt_frame(int sig, struct ksignal *ksig,
 
 	/* Set up registers for signal handler */
 	regs->sp = (unsigned long) frame;
-	regs->ip = (unsigned long) ksig->ka.sa.sa_handler;
+	regs->ip = (unsigned long) ka->sa.sa_handler;
 
 	/* Make -mregparm=3 work */
 	regs->ax = sig;

@@ -1290,11 +1290,13 @@ int tda18271_assign_map_layout(struct dvb_frontend *fe)
 	switch (priv->id) {
 	case TDA18271HDC1:
 		priv->maps = &tda18271c1_map_layout;
-		priv->std = tda18271c1_std_map;
+		memcpy(&priv->std, &tda18271c1_std_map,
+		       sizeof(struct tda18271_std_map));
 		break;
 	case TDA18271HDC2:
 		priv->maps = &tda18271c2_map_layout;
-		priv->std = tda18271c2_std_map;
+		memcpy(&priv->std, &tda18271c2_std_map,
+		       sizeof(struct tda18271_std_map));
 		break;
 	default:
 		ret = -EINVAL;
@@ -1305,3 +1307,11 @@ int tda18271_assign_map_layout(struct dvb_frontend *fe)
 
 	return ret;
 }
+
+/*
+ * Overrides for Emacs so that we follow Linus's tabbing style.
+ * ---------------------------------------------------------------------------
+ * Local variables:
+ * c-basic-offset: 8
+ * End:
+ */

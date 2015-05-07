@@ -184,7 +184,7 @@ static int ili210x_i2c_probe(struct i2c_client *client,
 				       const struct i2c_device_id *id)
 {
 	struct device *dev = &client->dev;
-	const struct ili210x_platform_data *pdata = dev_get_platdata(dev);
+	const struct ili210x_platform_data *pdata = dev->platform_data;
 	struct ili210x *priv;
 	struct input_dev *input;
 	struct panel_info panel;
@@ -311,7 +311,8 @@ static int ili210x_i2c_remove(struct i2c_client *client)
 	return 0;
 }
 
-static int __maybe_unused ili210x_i2c_suspend(struct device *dev)
+#ifdef CONFIG_PM_SLEEP
+static int ili210x_i2c_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 
@@ -321,7 +322,7 @@ static int __maybe_unused ili210x_i2c_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused ili210x_i2c_resume(struct device *dev)
+static int ili210x_i2c_resume(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 
@@ -330,6 +331,7 @@ static int __maybe_unused ili210x_i2c_resume(struct device *dev)
 
 	return 0;
 }
+#endif
 
 static SIMPLE_DEV_PM_OPS(ili210x_i2c_pm,
 			 ili210x_i2c_suspend, ili210x_i2c_resume);

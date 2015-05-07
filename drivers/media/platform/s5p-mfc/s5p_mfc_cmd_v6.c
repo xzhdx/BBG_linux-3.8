@@ -16,9 +16,8 @@
 #include "s5p_mfc_debug.h"
 #include "s5p_mfc_intr.h"
 #include "s5p_mfc_opr.h"
-#include "s5p_mfc_cmd_v6.h"
 
-static int s5p_mfc_cmd_host2risc_v6(struct s5p_mfc_dev *dev, int cmd,
+int s5p_mfc_cmd_host2risc_v6(struct s5p_mfc_dev *dev, int cmd,
 				struct s5p_mfc_cmd_args *args)
 {
 	mfc_debug(2, "Issue the command: %d\n", cmd);
@@ -33,7 +32,7 @@ static int s5p_mfc_cmd_host2risc_v6(struct s5p_mfc_dev *dev, int cmd,
 	return 0;
 }
 
-static int s5p_mfc_sys_init_cmd_v6(struct s5p_mfc_dev *dev)
+int s5p_mfc_sys_init_cmd_v6(struct s5p_mfc_dev *dev)
 {
 	struct s5p_mfc_cmd_args h2r_args;
 	struct s5p_mfc_buf_size_v6 *buf_size = dev->variant->buf_size->priv;
@@ -45,7 +44,7 @@ static int s5p_mfc_sys_init_cmd_v6(struct s5p_mfc_dev *dev)
 					&h2r_args);
 }
 
-static int s5p_mfc_sleep_cmd_v6(struct s5p_mfc_dev *dev)
+int s5p_mfc_sleep_cmd_v6(struct s5p_mfc_dev *dev)
 {
 	struct s5p_mfc_cmd_args h2r_args;
 
@@ -54,7 +53,7 @@ static int s5p_mfc_sleep_cmd_v6(struct s5p_mfc_dev *dev)
 			&h2r_args);
 }
 
-static int s5p_mfc_wakeup_cmd_v6(struct s5p_mfc_dev *dev)
+int s5p_mfc_wakeup_cmd_v6(struct s5p_mfc_dev *dev)
 {
 	struct s5p_mfc_cmd_args h2r_args;
 
@@ -64,7 +63,7 @@ static int s5p_mfc_wakeup_cmd_v6(struct s5p_mfc_dev *dev)
 }
 
 /* Open a new instance and get its number */
-static int s5p_mfc_open_inst_cmd_v6(struct s5p_mfc_ctx *ctx)
+int s5p_mfc_open_inst_cmd_v6(struct s5p_mfc_ctx *ctx)
 {
 	struct s5p_mfc_dev *dev = ctx->dev;
 	struct s5p_mfc_cmd_args h2r_args;
@@ -109,12 +108,9 @@ static int s5p_mfc_open_inst_cmd_v6(struct s5p_mfc_ctx *ctx)
 	case S5P_MFC_CODEC_H263_ENC:
 		codec_type = S5P_FIMV_CODEC_H263_ENC_V6;
 		break;
-	case S5P_MFC_CODEC_VP8_ENC:
-		codec_type = S5P_FIMV_CODEC_VP8_ENC_V7;
-		break;
 	default:
 		codec_type = S5P_FIMV_CODEC_NONE_V6;
-	}
+	};
 	mfc_write(dev, codec_type, S5P_FIMV_CODEC_TYPE_V6);
 	mfc_write(dev, ctx->ctx.dma, S5P_FIMV_CONTEXT_MEM_ADDR_V6);
 	mfc_write(dev, ctx->ctx.size, S5P_FIMV_CONTEXT_MEM_SIZE_V6);
@@ -125,7 +121,7 @@ static int s5p_mfc_open_inst_cmd_v6(struct s5p_mfc_ctx *ctx)
 }
 
 /* Close instance */
-static int s5p_mfc_close_inst_cmd_v6(struct s5p_mfc_ctx *ctx)
+int s5p_mfc_close_inst_cmd_v6(struct s5p_mfc_ctx *ctx)
 {
 	struct s5p_mfc_dev *dev = ctx->dev;
 	struct s5p_mfc_cmd_args h2r_args;

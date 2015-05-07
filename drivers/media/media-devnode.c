@@ -116,40 +116,18 @@ static unsigned int media_poll(struct file *filp,
 	return mdev->fops->poll(filp, poll);
 }
 
-static long
-__media_ioctl(struct file *filp, unsigned int cmd, unsigned long arg,
-	      long (*ioctl_func)(struct file *filp, unsigned int cmd,
-				 unsigned long arg))
+static long media_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	struct media_devnode *mdev = media_devnode_data(filp);
 
-	if (!ioctl_func)
+	if (!mdev->fops->ioctl)
 		return -ENOTTY;
 
 	if (!media_devnode_is_registered(mdev))
 		return -EIO;
 
-	return ioctl_func(filp, cmd, arg);
+	return mdev->fops->ioctl(filp, cmd, arg);
 }
-
-static long media_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
-{
-	struct media_devnode *mdev = media_devnode_data(filp);
-
-	return __media_ioctl(filp, cmd, arg, mdev->fops->ioctl);
-}
-
-#ifdef CONFIG_COMPAT
-
-static long media_compat_ioctl(struct file *filp, unsigned int cmd,
-			       unsigned long arg)
-{
-	struct media_devnode *mdev = media_devnode_data(filp);
-
-	return __media_ioctl(filp, cmd, arg, mdev->fops->compat_ioctl);
-}
-
-#endif /* CONFIG_COMPAT */
 
 /* Override for the open function */
 static int media_open(struct inode *inode, struct file *filp)
@@ -192,6 +170,7 @@ static int media_open(struct inode *inode, struct file *filp)
 static int media_release(struct inode *inode, struct file *filp)
 {
 	struct media_devnode *mdev = media_devnode_data(filp);
+	int ret = 0;
 
 	if (mdev->fops->release)
 		mdev->fops->release(filp);
@@ -200,7 +179,7 @@ static int media_release(struct inode *inode, struct file *filp)
 	   return value is ignored. */
 	put_device(&mdev->dev);
 	filp->private_data = NULL;
-	return 0;
+	return ret;
 }
 
 static const struct file_operations media_devnode_fops = {
@@ -209,9 +188,6 @@ static const struct file_operations media_devnode_fops = {
 	.write = media_write,
 	.open = media_open,
 	.unlocked_ioctl = media_ioctl,
-#ifdef CONFIG_COMPAT
-	.compat_ioctl = media_compat_ioctl,
-#endif /* CONFIG_COMPAT */
 	.release = media_release,
 	.poll = media_poll,
 	.llseek = no_llseek,
@@ -231,8 +207,7 @@ static const struct file_operations media_devnode_fops = {
  * the media_devnode structure is *not* called, so the caller is responsible for
  * freeing any data.
  */
-int __must_check media_devnode_register(struct media_devnode *mdev,
-					struct module *owner)
+int __must_check media_devnode_register(struct media_devnode *mdev)
 {
 	int minor;
 	int ret;
@@ -253,7 +228,7 @@ int __must_check media_devnode_register(struct media_devnode *mdev,
 
 	/* Part 2: Initialize and register the character device */
 	cdev_init(&mdev->cdev, &media_devnode_fops);
-	mdev->cdev.owner = owner;
+	mdev->cdev.owner = mdev->fops->owner;
 
 	ret = cdev_add(&mdev->cdev, MKDEV(MAJOR(media_dev_t), mdev->minor), 1);
 	if (ret < 0) {

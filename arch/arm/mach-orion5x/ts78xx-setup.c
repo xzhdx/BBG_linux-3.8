@@ -57,7 +57,7 @@ static struct map_desc ts78xx_io_desc[] __initdata = {
 	},
 };
 
-static void __init ts78xx_map_io(void)
+void __init ts78xx_map_io(void)
 {
 	orion5x_map_io();
 	iotable_init(ts78xx_io_desc, ARRAY_SIZE(ts78xx_io_desc));
@@ -403,8 +403,8 @@ static void ts78xx_fpga_supports(void)
 		/* enable devices if magic matches */
 		switch ((ts78xx_fpga.id >> 8) & 0xffffff) {
 		case TS7800_FPGA_MAGIC:
-			pr_warn("unrecognised FPGA revision 0x%.2x\n",
-				ts78xx_fpga.id & 0xff);
+			pr_warning("unrecognised FPGA revision 0x%.2x\n",
+					ts78xx_fpga.id & 0xff);
 			ts78xx_fpga.supports.ts_rtc.present = 1;
 			ts78xx_fpga.supports.ts_nand.present = 1;
 			ts78xx_fpga.supports.ts_rng.present = 1;
@@ -619,6 +619,6 @@ MACHINE_START(TS78XX, "Technologic Systems TS-78xx SBC")
 	.map_io		= ts78xx_map_io,
 	.init_early	= orion5x_init_early,
 	.init_irq	= orion5x_init_irq,
-	.init_time	= orion5x_timer_init,
+	.timer		= &orion5x_timer,
 	.restart	= orion5x_restart,
 MACHINE_END

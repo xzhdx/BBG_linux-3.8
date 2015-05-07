@@ -292,7 +292,6 @@ static void iommu_table_dart_setup(void)
 	iommu_table_dart.it_offset = 0;
 	/* it_size is in number of entries */
 	iommu_table_dart.it_size = dart_tablesize / sizeof(u32);
-	iommu_table_dart.it_page_shift = IOMMU_PAGE_SHIFT_4K;
 
 	/* Initialize the common IOMMU code */
 	iommu_table_dart.it_base = (unsigned long)dart_vbase;
@@ -369,7 +368,7 @@ static int dart_dma_set_mask(struct device *dev, u64 dma_mask)
 	return 0;
 }
 
-void __init iommu_init_early_dart(struct pci_controller_ops *controller_ops)
+void __init iommu_init_early_dart(void)
 {
 	struct device_node *dn;
 
@@ -395,8 +394,8 @@ void __init iommu_init_early_dart(struct pci_controller_ops *controller_ops)
 	if (dart_is_u4)
 		ppc_md.dma_set_mask = dart_dma_set_mask;
 
-	controller_ops->dma_dev_setup = pci_dma_dev_setup_dart;
-	controller_ops->dma_bus_setup = pci_dma_bus_setup_dart;
+	ppc_md.pci_dma_dev_setup = pci_dma_dev_setup_dart;
+	ppc_md.pci_dma_bus_setup = pci_dma_bus_setup_dart;
 
 	/* Setup pci_dma ops */
 	set_pci_dma_ops(&dma_iommu_ops);
@@ -404,8 +403,8 @@ void __init iommu_init_early_dart(struct pci_controller_ops *controller_ops)
 
  bail:
 	/* If init failed, use direct iommu and null setup functions */
-	controller_ops->dma_dev_setup = NULL;
-	controller_ops->dma_bus_setup = NULL;
+	ppc_md.pci_dma_dev_setup = NULL;
+	ppc_md.pci_dma_bus_setup = NULL;
 
 	/* Setup pci_dma ops */
 	set_pci_dma_ops(&dma_direct_ops);
@@ -476,11 +475,6 @@ void __init alloc_dart_table(void)
 	 */
 	dart_tablebase = (unsigned long)
 		__va(memblock_alloc_base(1UL<<24, 1UL<<24, 0x80000000L));
-	/*
-	 * The DART space is later unmapped from the kernel linear mapping and
-	 * accessing dart_tablebase during kmemleak scanning will fault.
-	 */
-	kmemleak_no_scan((void *)dart_tablebase);
 
 	printk(KERN_INFO "DART table allocated at: %lx\n", dart_tablebase);
 }

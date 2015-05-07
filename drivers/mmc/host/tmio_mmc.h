@@ -16,7 +16,6 @@
 #ifndef TMIO_MMC_H
 #define TMIO_MMC_H
 
-#include <linux/dmaengine.h>
 #include <linux/highmem.h>
 #include <linux/mmc/tmio.h>
 #include <linux/mutex.h>
@@ -40,20 +39,17 @@
 #define TMIO_MASK_IRQ     (TMIO_MASK_READOP | TMIO_MASK_WRITEOP | TMIO_MASK_CMD)
 
 struct tmio_mmc_data;
-struct tmio_mmc_host;
-
-struct tmio_mmc_dma {
-	enum dma_slave_buswidth dma_buswidth;
-	bool (*filter)(struct dma_chan *chan, void *arg);
-	void (*enable)(struct tmio_mmc_host *host, bool enable);
-};
 
 struct tmio_mmc_host {
 	void __iomem *ctl;
+	unsigned long bus_shift;
 	struct mmc_command      *cmd;
 	struct mmc_request      *mrq;
 	struct mmc_data         *data;
 	struct mmc_host         *mmc;
+
+	/* Controller power state */
+	bool			power;
 
 	/* Callbacks for clock / power control */
 	void (*set_pwr)(struct platform_device *host, int state);
@@ -64,11 +60,9 @@ struct tmio_mmc_host {
 	struct scatterlist      *sg_orig;
 	unsigned int            sg_len;
 	unsigned int            sg_off;
-	unsigned long		bus_shift;
 
 	struct platform_device *pdev;
 	struct tmio_mmc_data *pdata;
-	struct tmio_mmc_dma	*dma;
 
 	/* DMA support */
 	bool			force_pio;
@@ -83,27 +77,18 @@ struct tmio_mmc_host {
 	struct delayed_work	delayed_reset_work;
 	struct work_struct	done;
 
-	/* Cache */
+	/* Cache IRQ mask */
 	u32			sdcard_irq_mask;
 	u32			sdio_irq_mask;
-	unsigned int		clk_cache;
 
 	spinlock_t		lock;		/* protect host private data */
 	unsigned long		last_req_ts;
 	struct mutex		ios_lock;	/* protect set_ios() context */
 	bool			native_hotplug;
-	bool			sdio_irq_enabled;
-
-	int (*write16_hook)(struct tmio_mmc_host *host, int addr);
-	int (*clk_enable)(struct platform_device *pdev, unsigned int *f);
-	void (*clk_disable)(struct platform_device *pdev);
-	int (*multi_io_quirk)(struct mmc_card *card,
-			      unsigned int direction, int blk_size);
 };
 
-struct tmio_mmc_host *tmio_mmc_host_alloc(struct platform_device *pdev);
-void tmio_mmc_host_free(struct tmio_mmc_host *host);
-int tmio_mmc_host_probe(struct tmio_mmc_host *host,
+int tmio_mmc_host_probe(struct tmio_mmc_host **host,
+			struct platform_device *pdev,
 			struct tmio_mmc_data *pdata);
 void tmio_mmc_host_remove(struct tmio_mmc_host *host);
 void tmio_mmc_do_data_irq(struct tmio_mmc_host *host);
@@ -162,9 +147,15 @@ static inline void tmio_mmc_abort_dma(struct tmio_mmc_host *host)
 #endif
 
 #ifdef CONFIG_PM
+int tmio_mmc_host_suspend(struct device *dev);
+int tmio_mmc_host_resume(struct device *dev);
+#else
+#define tmio_mmc_host_suspend NULL
+#define tmio_mmc_host_resume NULL
+#endif
+
 int tmio_mmc_host_runtime_suspend(struct device *dev);
 int tmio_mmc_host_runtime_resume(struct device *dev);
-#endif
 
 static inline u16 sd_ctrl_read16(struct tmio_mmc_host *host, int addr)
 {
@@ -188,7 +179,7 @@ static inline void sd_ctrl_write16(struct tmio_mmc_host *host, int addr, u16 val
 	/* If there is a hook and it returns non-zero then there
 	 * is an error and the write should be skipped
 	 */
-	if (host->write16_hook && host->write16_hook(host, addr))
+	if (host->pdata->write16_hook && host->pdata->write16_hook(host, addr))
 		return;
 	writew(val, host->ctl + (addr << host->bus_shift));
 }

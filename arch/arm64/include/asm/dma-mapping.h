@@ -23,41 +23,16 @@
 
 #include <asm-generic/dma-coherent.h>
 
-#include <xen/xen.h>
-#include <asm/xen/hypervisor.h>
+#define ARCH_HAS_DMA_GET_REQUIRED_MASK
 
-#define DMA_ERROR_CODE	(~(dma_addr_t)0)
 extern struct dma_map_ops *dma_ops;
 
-static inline struct dma_map_ops *__generic_dma_ops(struct device *dev)
+static inline struct dma_map_ops *get_dma_ops(struct device *dev)
 {
 	if (unlikely(!dev) || !dev->archdata.dma_ops)
 		return dma_ops;
 	else
 		return dev->archdata.dma_ops;
-}
-
-static inline struct dma_map_ops *get_dma_ops(struct device *dev)
-{
-	if (xen_initial_domain())
-		return xen_dma_ops;
-	else
-		return __generic_dma_ops(dev);
-}
-
-static inline void arch_setup_dma_ops(struct device *dev, u64 dma_base, u64 size,
-				      struct iommu_ops *iommu, bool coherent)
-{
-	dev->archdata.dma_coherent = coherent;
-}
-#define arch_setup_dma_ops	arch_setup_dma_ops
-
-/* do not use this function in a driver */
-static inline bool is_device_dma_coherent(struct device *dev)
-{
-	if (!dev)
-		return false;
-	return dev->archdata.dma_coherent;
 }
 
 #include <asm-generic/dma-mapping-common.h>
@@ -97,7 +72,7 @@ static inline int dma_set_mask(struct device *dev, u64 mask)
 static inline bool dma_capable(struct device *dev, dma_addr_t addr, size_t size)
 {
 	if (!dev->dma_mask)
-		return false;
+		return 0;
 
 	return addr + size - 1 <= *dev->dma_mask;
 }
@@ -106,12 +81,8 @@ static inline void dma_mark_clean(void *addr, size_t size)
 {
 }
 
-#define dma_alloc_coherent(d, s, h, f)	dma_alloc_attrs(d, s, h, f, NULL)
-#define dma_free_coherent(d, s, h, f)	dma_free_attrs(d, s, h, f, NULL)
-
-static inline void *dma_alloc_attrs(struct device *dev, size_t size,
-				    dma_addr_t *dma_handle, gfp_t flags,
-				    struct dma_attrs *attrs)
+static inline void *dma_alloc_coherent(struct device *dev, size_t size,
+				       dma_addr_t *dma_handle, gfp_t flags)
 {
 	struct dma_map_ops *ops = get_dma_ops(dev);
 	void *vaddr;
@@ -119,14 +90,13 @@ static inline void *dma_alloc_attrs(struct device *dev, size_t size,
 	if (dma_alloc_from_coherent(dev, size, dma_handle, &vaddr))
 		return vaddr;
 
-	vaddr = ops->alloc(dev, size, dma_handle, flags, attrs);
+	vaddr = ops->alloc(dev, size, dma_handle, flags, NULL);
 	debug_dma_alloc_coherent(dev, size, *dma_handle, vaddr);
 	return vaddr;
 }
 
-static inline void dma_free_attrs(struct device *dev, size_t size,
-				  void *vaddr, dma_addr_t dev_addr,
-				  struct dma_attrs *attrs)
+static inline void dma_free_coherent(struct device *dev, size_t size,
+				     void *vaddr, dma_addr_t dev_addr)
 {
 	struct dma_map_ops *ops = get_dma_ops(dev);
 
@@ -134,7 +104,7 @@ static inline void dma_free_attrs(struct device *dev, size_t size,
 		return;
 
 	debug_dma_free_coherent(dev, size, vaddr, dev_addr);
-	ops->free(dev, size, vaddr, dev_addr, attrs);
+	ops->free(dev, size, vaddr, dev_addr, NULL);
 }
 
 /*

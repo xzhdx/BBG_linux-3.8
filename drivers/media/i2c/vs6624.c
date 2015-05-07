@@ -27,12 +27,25 @@
 #include <linux/types.h>
 #include <linux/videodev2.h>
 
+#include <media/v4l2-chip-ident.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-mediabus.h>
-#include <media/v4l2-image-sizes.h>
 
 #include "vs6624_regs.h"
+
+#define VGA_WIDTH       640
+#define VGA_HEIGHT      480
+#define QVGA_WIDTH      320
+#define QVGA_HEIGHT     240
+#define QQVGA_WIDTH     160
+#define QQVGA_HEIGHT    120
+#define CIF_WIDTH       352
+#define CIF_HEIGHT      288
+#define QCIF_WIDTH      176
+#define QCIF_HEIGHT     144
+#define QQCIF_WIDTH     88
+#define QQCIF_HEIGHT    72
 
 #define MAX_FRAME_RATE  30
 
@@ -45,19 +58,19 @@ struct vs6624 {
 };
 
 static const struct vs6624_format {
-	u32 mbus_code;
+	enum v4l2_mbus_pixelcode mbus_code;
 	enum v4l2_colorspace colorspace;
 } vs6624_formats[] = {
 	{
-		.mbus_code      = MEDIA_BUS_FMT_UYVY8_2X8,
+		.mbus_code      = V4L2_MBUS_FMT_UYVY8_2X8,
 		.colorspace     = V4L2_COLORSPACE_JPEG,
 	},
 	{
-		.mbus_code      = MEDIA_BUS_FMT_YUYV8_2X8,
+		.mbus_code      = V4L2_MBUS_FMT_YUYV8_2X8,
 		.colorspace     = V4L2_COLORSPACE_JPEG,
 	},
 	{
-		.mbus_code      = MEDIA_BUS_FMT_RGB565_2X8_LE,
+		.mbus_code      = V4L2_MBUS_FMT_RGB565_2X8_LE,
 		.colorspace     = V4L2_COLORSPACE_SRGB,
 	},
 };
@@ -65,7 +78,7 @@ static const struct vs6624_format {
 static struct v4l2_mbus_framefmt vs6624_default_fmt = {
 	.width = VGA_WIDTH,
 	.height = VGA_HEIGHT,
-	.code = MEDIA_BUS_FMT_UYVY8_2X8,
+	.code = V4L2_MBUS_FMT_UYVY8_2X8,
 	.field = V4L2_FIELD_NONE,
 	.colorspace = V4L2_COLORSPACE_JPEG,
 };
@@ -491,7 +504,6 @@ static inline struct v4l2_subdev *to_sd(struct v4l2_ctrl *ctrl)
 	return &container_of(ctrl->handler, struct vs6624, hdl)->sd;
 }
 
-#ifdef CONFIG_VIDEO_ADV_DEBUG
 static int vs6624_read(struct v4l2_subdev *sd, u16 index)
 {
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
@@ -504,7 +516,6 @@ static int vs6624_read(struct v4l2_subdev *sd, u16 index)
 
 	return buf[0];
 }
-#endif
 
 static int vs6624_write(struct v4l2_subdev *sd, u16 index,
 				u8 value)
@@ -558,7 +569,7 @@ static int vs6624_s_ctrl(struct v4l2_ctrl *ctrl)
 }
 
 static int vs6624_enum_mbus_fmt(struct v4l2_subdev *sd, unsigned index,
-				u32 *code)
+				enum v4l2_mbus_pixelcode *code)
 {
 	if (index >= ARRAY_SIZE(vs6624_formats))
 		return -EINVAL;
@@ -605,15 +616,15 @@ static int vs6624_s_mbus_fmt(struct v4l2_subdev *sd,
 
 	/* set image format */
 	switch (fmt->code) {
-	case MEDIA_BUS_FMT_UYVY8_2X8:
+	case V4L2_MBUS_FMT_UYVY8_2X8:
 		vs6624_write(sd, VS6624_IMG_FMT0, 0x0);
 		vs6624_write(sd, VS6624_YUV_SETUP, 0x1);
 		break;
-	case MEDIA_BUS_FMT_YUYV8_2X8:
+	case V4L2_MBUS_FMT_YUYV8_2X8:
 		vs6624_write(sd, VS6624_IMG_FMT0, 0x0);
 		vs6624_write(sd, VS6624_YUV_SETUP, 0x3);
 		break;
-	case MEDIA_BUS_FMT_RGB565_2X8_LE:
+	case V4L2_MBUS_FMT_RGB565_2X8_LE:
 		vs6624_write(sd, VS6624_IMG_FMT0, 0x4);
 		vs6624_write(sd, VS6624_RGB_SETUP, 0x0);
 		break;
@@ -711,16 +722,40 @@ static int vs6624_s_stream(struct v4l2_subdev *sd, int enable)
 	return 0;
 }
 
+static int vs6624_g_chip_ident(struct v4l2_subdev *sd,
+		struct v4l2_dbg_chip_ident *chip)
+{
+	int rev;
+	struct i2c_client *client = v4l2_get_subdevdata(sd);
+
+	rev = (vs6624_read(sd, VS6624_FW_VSN_MAJOR) << 8)
+		| vs6624_read(sd, VS6624_FW_VSN_MINOR);
+
+	return v4l2_chip_ident_i2c_client(client, chip, V4L2_IDENT_VS6624, rev);
+}
+
 #ifdef CONFIG_VIDEO_ADV_DEBUG
 static int vs6624_g_register(struct v4l2_subdev *sd, struct v4l2_dbg_register *reg)
 {
+	struct i2c_client *client = v4l2_get_subdevdata(sd);
+
+	if (!v4l2_chip_match_i2c_client(client, &reg->match))
+		return -EINVAL;
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
 	reg->val = vs6624_read(sd, reg->reg & 0xffff);
 	reg->size = 1;
 	return 0;
 }
 
-static int vs6624_s_register(struct v4l2_subdev *sd, const struct v4l2_dbg_register *reg)
+static int vs6624_s_register(struct v4l2_subdev *sd, struct v4l2_dbg_register *reg)
 {
+	struct i2c_client *client = v4l2_get_subdevdata(sd);
+
+	if (!v4l2_chip_match_i2c_client(client, &reg->match))
+		return -EINVAL;
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
 	vs6624_write(sd, reg->reg & 0xffff, reg->val & 0xff);
 	return 0;
 }
@@ -731,6 +766,7 @@ static const struct v4l2_ctrl_ops vs6624_ctrl_ops = {
 };
 
 static const struct v4l2_subdev_core_ops vs6624_core_ops = {
+	.g_chip_ident = vs6624_g_chip_ident,
 #ifdef CONFIG_VIDEO_ADV_DEBUG
 	.g_register = vs6624_g_register,
 	.s_register = vs6624_s_register,
@@ -769,18 +805,20 @@ static int vs6624_probe(struct i2c_client *client,
 	if (ce == NULL)
 		return -EINVAL;
 
-	ret = devm_gpio_request_one(&client->dev, *ce, GPIOF_OUT_INIT_HIGH,
-				    "VS6624 Chip Enable");
+	ret = gpio_request(*ce, "VS6624 Chip Enable");
 	if (ret) {
 		v4l_err(client, "failed to request GPIO %d\n", *ce);
 		return ret;
 	}
+	gpio_direction_output(*ce, 1);
 	/* wait 100ms before any further i2c writes are performed */
 	mdelay(100);
 
-	sensor = devm_kzalloc(&client->dev, sizeof(*sensor), GFP_KERNEL);
-	if (sensor == NULL)
+	sensor = kzalloc(sizeof(*sensor), GFP_KERNEL);
+	if (sensor == NULL) {
+		gpio_free(*ce);
 		return -ENOMEM;
+	}
 
 	sd = &sensor->sd;
 	v4l2_i2c_subdev_init(sd, client, &vs6624_ops);
@@ -828,22 +866,30 @@ static int vs6624_probe(struct i2c_client *client,
 		int err = hdl->error;
 
 		v4l2_ctrl_handler_free(hdl);
+		kfree(sensor);
+		gpio_free(*ce);
 		return err;
 	}
 
 	/* initialize the hardware to the default control values */
 	ret = v4l2_ctrl_handler_setup(hdl);
-	if (ret)
+	if (ret) {
 		v4l2_ctrl_handler_free(hdl);
+		kfree(sensor);
+		gpio_free(*ce);
+	}
 	return ret;
 }
 
 static int vs6624_remove(struct i2c_client *client)
 {
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
+	struct vs6624 *sensor = to_vs6624(sd);
 
 	v4l2_device_unregister_subdev(sd);
 	v4l2_ctrl_handler_free(sd->ctrl_handler);
+	gpio_free(sensor->ce_pin);
+	kfree(sensor);
 	return 0;
 }
 

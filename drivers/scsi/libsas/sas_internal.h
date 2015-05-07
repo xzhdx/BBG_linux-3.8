@@ -66,7 +66,9 @@ void sas_unregister_ports(struct sas_ha_struct *sas_ha);
 
 enum blk_eh_timer_return sas_scsi_timed_out(struct scsi_cmnd *);
 
+int  sas_init_queue(struct sas_ha_struct *sas_ha);
 int  sas_init_events(struct sas_ha_struct *sas_ha);
+void sas_shutdown_queue(struct sas_ha_struct *sas_ha);
 void sas_disable_revalidation(struct sas_ha_struct *ha);
 void sas_enable_revalidation(struct sas_ha_struct *ha);
 void __sas_drain_work(struct sas_ha_struct *ha);
@@ -129,16 +131,16 @@ static inline void sas_fill_in_rphy(struct domain_device *dev,
 	rphy->identify.initiator_port_protocols = dev->iproto;
 	rphy->identify.target_port_protocols = dev->tproto;
 	switch (dev->dev_type) {
-	case SAS_SATA_DEV:
+	case SATA_DEV:
 		/* FIXME: need sata device type */
-	case SAS_END_DEVICE:
-	case SAS_SATA_PENDING:
+	case SAS_END_DEV:
+	case SATA_PENDING:
 		rphy->identify.device_type = SAS_END_DEVICE;
 		break;
-	case SAS_EDGE_EXPANDER_DEVICE:
+	case EDGE_DEV:
 		rphy->identify.device_type = SAS_EDGE_EXPANDER_DEVICE;
 		break;
-	case SAS_FANOUT_EXPANDER_DEVICE:
+	case FANOUT_DEV:
 		rphy->identify.device_type = SAS_FANOUT_EXPANDER_DEVICE;
 		break;
 	default:

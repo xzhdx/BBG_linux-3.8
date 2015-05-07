@@ -23,17 +23,13 @@
 /**
  * iio_simple_dummy_read_event_config() - is event enabled?
  * @indio_dev: the device instance data
- * @chan: channel for the event whose state is being queried
- * @type: type of the event whose state is being queried
- * @dir: direction of the vent whose state is being queried
+ * @event_code: event code of the event being queried
  *
  * This function would normally query the relevant registers or a cache to
  * discover if the event generation is enabled on the device.
  */
 int iio_simple_dummy_read_event_config(struct iio_dev *indio_dev,
-				       const struct iio_chan_spec *chan,
-				       enum iio_event_type type,
-				       enum iio_event_direction dir)
+				       u64 event_code)
 {
 	struct iio_dummy_state *st = iio_priv(indio_dev);
 
@@ -43,9 +39,7 @@ int iio_simple_dummy_read_event_config(struct iio_dev *indio_dev,
 /**
  * iio_simple_dummy_write_event_config() - set whether event is enabled
  * @indio_dev: the device instance data
- * @chan: channel for the event whose state is being set
- * @type: type of the event whose state is being set
- * @dir: direction of the vent whose state is being set
+ * @event_code: event code of event being enabled/disabled
  * @state: whether to enable or disable the device.
  *
  * This function would normally set the relevant registers on the devices
@@ -53,9 +47,7 @@ int iio_simple_dummy_read_event_config(struct iio_dev *indio_dev,
  * value.
  */
 int iio_simple_dummy_write_event_config(struct iio_dev *indio_dev,
-					const struct iio_chan_spec *chan,
-					enum iio_event_type type,
-					enum iio_event_direction dir,
+					u64 event_code,
 					int state)
 {
 	struct iio_dummy_state *st = iio_priv(indio_dev);
@@ -64,30 +56,15 @@ int iio_simple_dummy_write_event_config(struct iio_dev *indio_dev,
 	 *  Deliberately over the top code splitting to illustrate
 	 * how this is done when multiple events exist.
 	 */
-	switch (chan->type) {
+	switch (IIO_EVENT_CODE_EXTRACT_CHAN_TYPE(event_code)) {
 	case IIO_VOLTAGE:
-		switch (type) {
+		switch (IIO_EVENT_CODE_EXTRACT_TYPE(event_code)) {
 		case IIO_EV_TYPE_THRESH:
-			if (dir == IIO_EV_DIR_RISING)
+			if (IIO_EVENT_CODE_EXTRACT_DIR(event_code) ==
+			    IIO_EV_DIR_RISING)
 				st->event_en = state;
 			else
 				return -EINVAL;
-		default:
-			return -EINVAL;
-		}
-		break;
-	case IIO_ACTIVITY:
-		switch (type) {
-		case IIO_EV_TYPE_THRESH:
-			st->event_en = state;
-			break;
-		default:
-			return -EINVAL;
-		}
-	case IIO_STEPS:
-		switch (type) {
-		case IIO_EV_TYPE_CHANGE:
-			st->event_en = state;
 			break;
 		default:
 			return -EINVAL;
@@ -102,10 +79,7 @@ int iio_simple_dummy_write_event_config(struct iio_dev *indio_dev,
 /**
  * iio_simple_dummy_read_event_value() - get value associated with event
  * @indio_dev: device instance specific data
- * @chan: channel for the event whose value is being read
- * @type: type of the event whose value is being read
- * @dir: direction of the vent whose value is being read
- * @info: info type of the event whose value is being read
+ * @event_code: event code for the event whose value is being queried
  * @val: value for the event code.
  *
  * Many devices provide a large set of events of which only a subset may
@@ -115,34 +89,25 @@ int iio_simple_dummy_write_event_config(struct iio_dev *indio_dev,
  * the enabled event is changed.
  */
 int iio_simple_dummy_read_event_value(struct iio_dev *indio_dev,
-				      const struct iio_chan_spec *chan,
-				      enum iio_event_type type,
-				      enum iio_event_direction dir,
-					  enum iio_event_info info,
-				      int *val, int *val2)
+				      u64 event_code,
+				      int *val)
 {
 	struct iio_dummy_state *st = iio_priv(indio_dev);
 
 	*val = st->event_val;
 
-	return IIO_VAL_INT;
+	return 0;
 }
 
 /**
  * iio_simple_dummy_write_event_value() - set value associate with event
  * @indio_dev: device instance specific data
- * @chan: channel for the event whose value is being set
- * @type: type of the event whose value is being set
- * @dir: direction of the vent whose value is being set
- * @info: info type of the event whose value is being set
+ * @event_code: event code for the event whose value is being set
  * @val: the value to be set.
  */
 int iio_simple_dummy_write_event_value(struct iio_dev *indio_dev,
-				       const struct iio_chan_spec *chan,
-				       enum iio_event_type type,
-				       enum iio_event_direction dir,
-					   enum iio_event_info info,
-				       int val, int val2)
+				       u64 event_code,
+				       int val)
 {
 	struct iio_dummy_state *st = iio_priv(indio_dev);
 
@@ -164,50 +129,11 @@ int iio_simple_dummy_write_event_value(struct iio_dev *indio_dev,
 static irqreturn_t iio_simple_dummy_event_handler(int irq, void *private)
 {
 	struct iio_dev *indio_dev = private;
-	struct iio_dummy_state *st = iio_priv(indio_dev);
-
-	dev_dbg(&indio_dev->dev, "id %x event %x\n",
-		st->regs->reg_id, st->regs->reg_data);
-
-	switch (st->regs->reg_data) {
-	case 0:
-		iio_push_event(indio_dev,
-			       IIO_EVENT_CODE(IIO_VOLTAGE, 0, 0,
-					      IIO_EV_DIR_RISING,
-					      IIO_EV_TYPE_THRESH, 0, 0, 0),
-			       iio_get_time_ns());
-		break;
-	case 1:
-		if (st->activity_running > st->event_val)
-			iio_push_event(indio_dev,
-				       IIO_EVENT_CODE(IIO_ACTIVITY, 0,
-						      IIO_MOD_RUNNING,
-						      IIO_EV_DIR_RISING,
-						      IIO_EV_TYPE_THRESH,
-						      0, 0, 0),
-				       iio_get_time_ns());
-		break;
-	case 2:
-		if (st->activity_walking < st->event_val)
-			iio_push_event(indio_dev,
-				       IIO_EVENT_CODE(IIO_ACTIVITY, 0,
-						      IIO_MOD_WALKING,
-						      IIO_EV_DIR_FALLING,
-						      IIO_EV_TYPE_THRESH,
-						      0, 0, 0),
-				       iio_get_time_ns());
-		break;
-	case 3:
-		iio_push_event(indio_dev,
-			       IIO_EVENT_CODE(IIO_STEPS, 0, IIO_NO_MOD,
-					      IIO_EV_DIR_NONE,
-					      IIO_EV_TYPE_CHANGE, 0, 0, 0),
-			       iio_get_time_ns());
-		break;
-	default:
-		break;
-	}
-
+	iio_push_event(indio_dev,
+		       IIO_EVENT_CODE(IIO_VOLTAGE, 0, 0,
+				      IIO_EV_DIR_RISING,
+				      IIO_EV_TYPE_THRESH, 0, 0, 0),
+		       iio_get_time_ns());
 	return IRQ_HANDLED;
 }
 
@@ -233,8 +159,6 @@ int iio_simple_dummy_events_register(struct iio_dev *indio_dev)
 		ret = st->event_irq;
 		goto error_ret;
 	}
-	st->regs = iio_dummy_evgen_get_regs(st->event_irq);
-
 	ret = request_threaded_irq(st->event_irq,
 				   NULL,
 				   &iio_simple_dummy_event_handler,

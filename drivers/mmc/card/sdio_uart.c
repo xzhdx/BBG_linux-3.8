@@ -134,6 +134,7 @@ static void sdio_uart_port_put(struct sdio_uart_port *port)
 static void sdio_uart_port_remove(struct sdio_uart_port *port)
 {
 	struct sdio_func *func;
+	struct tty_struct *tty;
 
 	BUG_ON(sdio_uart_table[port->index] != port);
 
@@ -154,8 +155,12 @@ static void sdio_uart_port_remove(struct sdio_uart_port *port)
 	sdio_claim_host(func);
 	port->func = NULL;
 	mutex_unlock(&port->func_lock);
+	tty = tty_port_tty_get(&port->port);
 	/* tty_hangup is async so is this safe as is ?? */
-	tty_port_tty_hangup(&port->port, false);
+	if (tty) {
+		tty_hangup(tty);
+		tty_kref_put(tty);
+	}
 	mutex_unlock(&port->port.mutex);
 	sdio_release_irq(func);
 	sdio_disable_func(func);
@@ -376,6 +381,7 @@ static void sdio_uart_stop_rx(struct sdio_uart_port *port)
 static void sdio_uart_receive_chars(struct sdio_uart_port *port,
 				    unsigned int *status)
 {
+	struct tty_struct *tty = tty_port_tty_get(&port->port);
 	unsigned int ch, flag;
 	int max_count = 256;
 
@@ -412,19 +418,23 @@ static void sdio_uart_receive_chars(struct sdio_uart_port *port,
 		}
 
 		if ((*status & port->ignore_status_mask & ~UART_LSR_OE) == 0)
-			tty_insert_flip_char(&port->port, ch, flag);
+			if (tty)
+				tty_insert_flip_char(tty, ch, flag);
 
 		/*
 		 * Overrun is special.  Since it's reported immediately,
 		 * it doesn't affect the current character.
 		 */
 		if (*status & ~port->ignore_status_mask & UART_LSR_OE)
-			tty_insert_flip_char(&port->port, 0, TTY_OVERRUN);
+			if (tty)
+				tty_insert_flip_char(tty, 0, TTY_OVERRUN);
 
 		*status = sdio_in(port, UART_LSR);
 	} while ((*status & UART_LSR_DR) && (max_count-- > 0));
-
-	tty_flip_buffer_push(&port->port);
+	if (tty) {
+		tty_flip_buffer_push(tty);
+		tty_kref_put(tty);
+	}
 }
 
 static void sdio_uart_transmit_chars(struct sdio_uart_port *port)
@@ -487,7 +497,11 @@ static void sdio_uart_check_modem_status(struct sdio_uart_port *port)
 			wake_up_interruptible(&port->port.open_wait);
 		else {
 			/* DCD drop - hang up if tty attached */
-			tty_port_tty_hangup(&port->port, false);
+			tty = tty_port_tty_get(&port->port);
+			if (tty) {
+				tty_hangup(tty);
+				tty_kref_put(tty);
+			}
 		}
 	}
 	if (status & UART_MSR_DCTS) {
@@ -1063,8 +1077,8 @@ static int sdio_uart_probe(struct sdio_func *func,
 		return -ENOMEM;
 
 	if (func->class == SDIO_CLASS_UART) {
-		pr_warn("%s: need info on UART class basic setup\n",
-			sdio_func_id(func));
+		pr_warning("%s: need info on UART class basic setup\n",
+		       sdio_func_id(func));
 		kfree(port);
 		return -ENOSYS;
 	} else if (func->class == SDIO_CLASS_GPS) {
@@ -1082,8 +1096,9 @@ static int sdio_uart_probe(struct sdio_func *func,
 				break;
 		}
 		if (!tpl) {
-			pr_warn("%s: can't find tuple 0x91 subtuple 0 (SUBTPL_SIOREG) for GPS class\n",
-				sdio_func_id(func));
+			pr_warning(
+       "%s: can't find tuple 0x91 subtuple 0 (SUBTPL_SIOREG) for GPS class\n",
+			       sdio_func_id(func));
 			kfree(port);
 			return -EINVAL;
 		}

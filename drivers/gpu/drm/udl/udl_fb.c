@@ -393,6 +393,19 @@ static struct fb_ops udlfb_ops = {
 	.fb_release = udl_fb_release,
 };
 
+static void udl_crtc_fb_gamma_set(struct drm_crtc *crtc, u16 red, u16 green,
+			   u16 blue, int regno)
+{
+}
+
+static void udl_crtc_fb_gamma_get(struct drm_crtc *crtc, u16 *red, u16 *green,
+			     u16 *blue, int regno)
+{
+	*red = 0;
+	*green = 0;
+	*blue = 0;
+}
+
 static int udl_user_framebuffer_dirty(struct drm_framebuffer *fb,
 				      struct drm_file *file,
 				      unsigned flags, unsigned color,
@@ -403,17 +416,15 @@ static int udl_user_framebuffer_dirty(struct drm_framebuffer *fb,
 	int i;
 	int ret = 0;
 
-	drm_modeset_lock_all(fb->dev);
-
 	if (!ufb->active_16)
-		goto unlock;
+		return 0;
 
 	if (ufb->obj->base.import_attach) {
 		ret = dma_buf_begin_cpu_access(ufb->obj->base.import_attach->dmabuf,
 					       0, ufb->obj->base.size,
 					       DMA_FROM_DEVICE);
 		if (ret)
-			goto unlock;
+			return ret;
 	}
 
 	for (i = 0; i < num_clips; i++) {
@@ -429,10 +440,6 @@ static int udl_user_framebuffer_dirty(struct drm_framebuffer *fb,
 				       0, ufb->obj->base.size,
 				       DMA_FROM_DEVICE);
 	}
-
- unlock:
-	drm_modeset_unlock_all(fb->dev);
-
 	return ret;
 }
 
@@ -450,6 +457,7 @@ static void udl_user_framebuffer_destroy(struct drm_framebuffer *fb)
 static const struct drm_framebuffer_funcs udlfb_funcs = {
 	.destroy = udl_user_framebuffer_destroy,
 	.dirty = udl_user_framebuffer_dirty,
+	.create_handle = NULL,
 };
 
 
@@ -463,20 +471,18 @@ udl_framebuffer_init(struct drm_device *dev,
 
 	spin_lock_init(&ufb->dirty_lock);
 	ufb->obj = obj;
-	drm_helper_mode_fill_fb_struct(&ufb->base, mode_cmd);
 	ret = drm_framebuffer_init(dev, &ufb->base, &udlfb_funcs);
+	drm_helper_mode_fill_fb_struct(&ufb->base, mode_cmd);
 	return ret;
 }
 
 
-static int udlfb_create(struct drm_fb_helper *helper,
+static int udlfb_create(struct udl_fbdev *ufbdev,
 			struct drm_fb_helper_surface_size *sizes)
 {
-	struct udl_fbdev *ufbdev =
-		container_of(helper, struct udl_fbdev, helper);
 	struct drm_device *dev = ufbdev->helper.dev;
 	struct fb_info *info;
-	struct device *device = dev->dev;
+	struct device *device = &dev->usbdev->dev;
 	struct drm_framebuffer *fb;
 	struct drm_mode_fb_cmd2 mode_cmd;
 	struct udl_gem_object *obj;
@@ -551,8 +557,27 @@ out:
 	return ret;
 }
 
-static const struct drm_fb_helper_funcs udl_fb_helper_funcs = {
-	.fb_probe = udlfb_create,
+static int udl_fb_find_or_create_single(struct drm_fb_helper *helper,
+					struct drm_fb_helper_surface_size *sizes)
+{
+	struct udl_fbdev *ufbdev = (struct udl_fbdev *)helper;
+	int new_fb = 0;
+	int ret;
+
+	if (!helper->fb) {
+		ret = udlfb_create(ufbdev, sizes);
+		if (ret)
+			return ret;
+
+		new_fb = 1;
+	}
+	return new_fb;
+}
+
+static struct drm_fb_helper_funcs udl_fb_helper_funcs = {
+	.gamma_set = udl_crtc_fb_gamma_set,
+	.gamma_get = udl_crtc_fb_gamma_get,
+	.fb_probe = udl_fb_find_or_create_single,
 };
 
 static void udl_fbdev_destroy(struct drm_device *dev,
@@ -567,7 +592,6 @@ static void udl_fbdev_destroy(struct drm_device *dev,
 		framebuffer_release(info);
 	}
 	drm_fb_helper_fini(&ufbdev->helper);
-	drm_framebuffer_unregister_private(&ufbdev->ufb.base);
 	drm_framebuffer_cleanup(&ufbdev->ufb.base);
 	drm_gem_object_unreference_unlocked(&ufbdev->ufb.obj->base);
 }
@@ -584,32 +608,19 @@ int udl_fbdev_init(struct drm_device *dev)
 		return -ENOMEM;
 
 	udl->fbdev = ufbdev;
-
-	drm_fb_helper_prepare(dev, &ufbdev->helper, &udl_fb_helper_funcs);
+	ufbdev->helper.funcs = &udl_fb_helper_funcs;
 
 	ret = drm_fb_helper_init(dev, &ufbdev->helper,
 				 1, 1);
-	if (ret)
-		goto free;
+	if (ret) {
+		kfree(ufbdev);
+		return ret;
 
-	ret = drm_fb_helper_single_add_all_connectors(&ufbdev->helper);
-	if (ret)
-		goto fini;
+	}
 
-	/* disable all the possible outputs/crtcs before entering KMS mode */
-	drm_helper_disable_unused_functions(dev);
-
-	ret = drm_fb_helper_initial_config(&ufbdev->helper, bpp_sel);
-	if (ret)
-		goto fini;
-
+	drm_fb_helper_single_add_all_connectors(&ufbdev->helper);
+	drm_fb_helper_initial_config(&ufbdev->helper, bpp_sel);
 	return 0;
-
-fini:
-	drm_fb_helper_fini(&ufbdev->helper);
-free:
-	kfree(ufbdev);
-	return ret;
 }
 
 void udl_fbdev_cleanup(struct drm_device *dev)

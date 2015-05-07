@@ -211,7 +211,6 @@ static int mace_probe(struct platform_device *pdev)
 	mp = netdev_priv(dev);
 
 	mp->device = &pdev->dev;
-	platform_set_drvdata(pdev, dev);
 	SET_NETDEV_DEV(dev, &pdev->dev);
 
 	dev->base_addr = (u32)MACE_BASE;
@@ -387,16 +386,20 @@ static int mace_open(struct net_device *dev)
 	/* Allocate the DMA ring buffers */
 
 	mp->tx_ring = dma_alloc_coherent(mp->device,
-					 N_TX_RING * MACE_BUFF_SIZE,
-					 &mp->tx_ring_phys, GFP_KERNEL);
-	if (mp->tx_ring == NULL)
+			N_TX_RING * MACE_BUFF_SIZE,
+			&mp->tx_ring_phys, GFP_KERNEL);
+	if (mp->tx_ring == NULL) {
+		printk(KERN_ERR "%s: unable to allocate DMA tx buffers\n", dev->name);
 		goto out1;
+	}
 
 	mp->rx_ring = dma_alloc_coherent(mp->device,
-					 N_RX_RING * MACE_BUFF_SIZE,
-					 &mp->rx_ring_phys, GFP_KERNEL);
-	if (mp->rx_ring == NULL)
+			N_RX_RING * MACE_BUFF_SIZE,
+			&mp->rx_ring_phys, GFP_KERNEL);
+	if (mp->rx_ring == NULL) {
+		printk(KERN_ERR "%s: unable to allocate DMA rx buffers\n", dev->name);
 		goto out2;
+	}
 
 	mace_dma_off(dev);
 
@@ -575,7 +578,7 @@ static irqreturn_t mace_interrupt(int irq, void *dev_id)
 			mace_reset(dev);
 			/*
 			 * XXX mace likes to hang the machine after a xmtfs error.
-			 * This is hard to reproduce, resetting *may* help
+			 * This is hard to reproduce, reseting *may* help
 			 */
 		}
 		/* dma should have finished */
@@ -768,6 +771,7 @@ static struct platform_driver mac_mace_driver = {
 	.remove = mac_mace_device_remove,
 	.driver	= {
 		.name	= mac_mace_string,
+		.owner	= THIS_MODULE,
 	},
 };
 

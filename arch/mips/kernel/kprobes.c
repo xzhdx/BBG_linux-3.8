@@ -207,10 +207,7 @@ void __kprobes arch_disarm_kprobe(struct kprobe *p)
 
 void __kprobes arch_remove_kprobe(struct kprobe *p)
 {
-	if (p->ainsn.insn) {
-		free_insn_slot(p->ainsn.insn, 0);
-		p->ainsn.insn = NULL;
-	}
+	free_insn_slot(p->ainsn.insn, 0);
 }
 
 static void save_previous_kprobe(struct kprobe_ctlblk *kcb)
@@ -224,7 +221,7 @@ static void save_previous_kprobe(struct kprobe_ctlblk *kcb)
 
 static void restore_previous_kprobe(struct kprobe_ctlblk *kcb)
 {
-	__this_cpu_write(current_kprobe, kcb->prev_kprobe.kp);
+	__get_cpu_var(current_kprobe) = kcb->prev_kprobe.kp;
 	kcb->kprobe_status = kcb->prev_kprobe.status;
 	kcb->kprobe_old_SR = kcb->prev_kprobe.old_SR;
 	kcb->kprobe_saved_SR = kcb->prev_kprobe.saved_SR;
@@ -234,7 +231,7 @@ static void restore_previous_kprobe(struct kprobe_ctlblk *kcb)
 static void set_current_kprobe(struct kprobe *p, struct pt_regs *regs,
 			       struct kprobe_ctlblk *kcb)
 {
-	__this_cpu_write(current_kprobe, p);
+	__get_cpu_var(current_kprobe) = p;
 	kcb->kprobe_saved_SR = kcb->kprobe_old_SR = (regs->cp0_status & ST0_IE);
 	kcb->kprobe_saved_epc = regs->cp0_epc;
 }
@@ -310,7 +307,7 @@ static void prepare_singlestep(struct kprobe *p, struct pt_regs *regs,
 /*
  * Called after single-stepping.  p->addr is the address of the
  * instruction whose first byte has been replaced by the "break 0"
- * instruction.	 To avoid the SMP problems that can occur when we
+ * instruction.  To avoid the SMP problems that can occur when we
  * temporarily put back the original opcode to single-step, we
  * single-stepped a copy of the instruction.  The address of this
  * copy is p->ainsn.insn.
@@ -385,7 +382,7 @@ static int __kprobes kprobe_handler(struct pt_regs *regs)
 				ret = 1;
 				goto no_kprobe;
 			}
-			p = __this_cpu_read(current_kprobe);
+			p = __get_cpu_var(current_kprobe);
 			if (p->break_handler && p->break_handler(p, regs))
 				goto ss_probe;
 		}
@@ -538,7 +535,7 @@ void jprobe_return_end(void);
 
 void __kprobes jprobe_return(void)
 {
-	/* Assembler quirk necessitates this '0,code' business.	 */
+	/* Assembler quirk necessitates this '0,code' business.  */
 	asm volatile(
 		"break 0,%0\n\t"
 		".globl jprobe_return_end\n"
@@ -601,7 +598,7 @@ static int __kprobes trampoline_probe_handler(struct kprobe *p,
 {
 	struct kretprobe_instance *ri = NULL;
 	struct hlist_head *head, empty_rp;
-	struct hlist_node *tmp;
+	struct hlist_node *node, *tmp;
 	unsigned long flags, orig_ret_address = 0;
 	unsigned long trampoline_address = (unsigned long)kretprobe_trampoline;
 
@@ -617,11 +614,11 @@ static int __kprobes trampoline_probe_handler(struct kprobe *p,
 	 * We can handle this because:
 	 *     - instances are always inserted at the head of the list
 	 *     - when multiple return probes are registered for the same
-	 *	 function, the first instance's ret_addr will point to the
-	 *	 real return address, and all the rest will point to
-	 *	 kretprobe_trampoline
+	 *       function, the first instance's ret_addr will point to the
+	 *       real return address, and all the rest will point to
+	 *       kretprobe_trampoline
 	 */
-	hlist_for_each_entry_safe(ri, tmp, head, hlist) {
+	hlist_for_each_entry_safe(ri, node, tmp, head, hlist) {
 		if (ri->task != current)
 			/* another task is sharing our hash bucket */
 			continue;
@@ -648,7 +645,7 @@ static int __kprobes trampoline_probe_handler(struct kprobe *p,
 	kretprobe_hash_unlock(current, &flags);
 	preempt_enable_no_resched();
 
-	hlist_for_each_entry_safe(ri, tmp, &empty_rp, hlist) {
+	hlist_for_each_entry_safe(ri, node, tmp, &empty_rp, hlist) {
 		hlist_del(&ri->hlist);
 		kfree(ri);
 	}

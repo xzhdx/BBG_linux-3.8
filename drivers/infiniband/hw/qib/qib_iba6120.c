@@ -1,5 +1,4 @@
 /*
- * Copyright (c) 2013 Intel Corporation. All rights reserved.
  * Copyright (c) 2006, 2007, 2008, 2009, 2010 QLogic Corporation.
  * All rights reserved.
  * Copyright (c) 2003, 2004, 2005, 2006 PathScale, Inc. All rights reserved.
@@ -52,7 +51,7 @@ static u32 qib_6120_iblink_state(u64);
 
 /*
  * This file contains all the chip-specific register information and
- * access functions for the Intel Intel_IB PCI-Express chip.
+ * access functions for the QLogic QLogic_IB PCI-Express chip.
  *
  */
 
@@ -333,7 +332,6 @@ static inline void qib_write_ureg(const struct qib_devdata *dd,
 				  enum qib_ureg regno, u64 value, int ctxt)
 {
 	u64 __iomem *ubase;
-
 	if (dd->userbase)
 		ubase = (u64 __iomem *)
 			((char __iomem *) dd->userbase +
@@ -835,14 +833,14 @@ static void qib_handle_6120_hwerrors(struct qib_devdata *dd, char *msg,
 		bits = (u32) ((hwerrs >>
 			       QLOGIC_IB_HWE_PCIEMEMPARITYERR_SHIFT) &
 			      QLOGIC_IB_HWE_PCIEMEMPARITYERR_MASK);
-		snprintf(bitsmsg, sizeof(dd->cspec->bitsmsgbuf),
+		snprintf(bitsmsg, sizeof dd->cspec->bitsmsgbuf,
 			 "[PCIe Mem Parity Errs %x] ", bits);
 		strlcat(msg, bitsmsg, msgl);
 	}
 
 	if (hwerrs & _QIB_PLL_FAIL) {
 		isfatal = 1;
-		snprintf(bitsmsg, sizeof(dd->cspec->bitsmsgbuf),
+		snprintf(bitsmsg, sizeof dd->cspec->bitsmsgbuf,
 			 "[PLL failed (%llx), InfiniPath hardware unusable]",
 			 (unsigned long long) hwerrs & _QIB_PLL_FAIL);
 		strlcat(msg, bitsmsg, msgl);
@@ -1015,7 +1013,7 @@ static void handle_6120_errors(struct qib_devdata *dd, u64 errs)
 
 	/* do these first, they are most important */
 	if (errs & ERR_MASK(HardwareErr))
-		qib_handle_6120_hwerrors(dd, msg, sizeof(dd->cspec->emsgbuf));
+		qib_handle_6120_hwerrors(dd, msg, sizeof dd->cspec->emsgbuf);
 	else
 		for (log_idx = 0; log_idx < QIB_EEP_LOG_CNT; ++log_idx)
 			if (errs & dd->eep_st_masks[log_idx].errs_to_log)
@@ -1063,7 +1061,7 @@ static void handle_6120_errors(struct qib_devdata *dd, u64 errs)
 	 */
 	mask = ERR_MASK(IBStatusChanged) | ERR_MASK(RcvEgrFullErr) |
 		ERR_MASK(RcvHdrFullErr) | ERR_MASK(HardwareErr);
-	qib_decode_6120_err(dd, msg, sizeof(dd->cspec->emsgbuf), errs & ~mask);
+	qib_decode_6120_err(dd, msg, sizeof dd->cspec->emsgbuf, errs & ~mask);
 
 	if (errs & E_SUM_PKTERRS)
 		qib_stats.sps_rcverrs++;
@@ -1635,7 +1633,9 @@ static irqreturn_t qib_6120intr(int irq, void *data)
 		goto bail;
 	}
 
-	this_cpu_inc(*dd->int_counter);
+	qib_stats.sps_ints++;
+	if (dd->int_counter != (u32) -1)
+		dd->int_counter++;
 
 	if (unlikely(istat & (~QLOGIC_IB_I_BITSEXTANT |
 			      QLOGIC_IB_I_GPIO | QLOGIC_IB_I_ERROR)))
@@ -1671,7 +1671,6 @@ static irqreturn_t qib_6120intr(int irq, void *data)
 		}
 		if (crcs) {
 			u32 cntr = dd->cspec->lli_counter;
-
 			cntr += crcs;
 			if (cntr) {
 				if (cntr > dd->cspec->lli_thresh) {
@@ -1724,7 +1723,6 @@ static void qib_setup_6120_interrupt(struct qib_devdata *dd)
 			"irq is 0, BIOS error?  Interrupts won't work\n");
 	else {
 		int ret;
-
 		ret = request_irq(dd->cspec->irq, qib_6120intr, 0,
 				  QIB_DRV_NAME, dd);
 		if (ret)
@@ -1809,8 +1807,7 @@ static int qib_6120_setup_reset(struct qib_devdata *dd)
 	 * isn't set.
 	 */
 	dd->flags &= ~(QIB_INITTED | QIB_PRESENT);
-	/* so we check interrupts work again */
-	dd->z_int_counter = qib_int_counter(dd);
+	dd->int_counter = 0; /* so we check interrupts work again */
 	val = dd->control | QLOGIC_IB_C_RESET;
 	writeq(val, &dd->kregbase[kr_control]);
 	mb(); /* prevent compiler re-ordering around actual reset */
@@ -2684,6 +2681,8 @@ static void qib_get_6120_faststats(unsigned long opaque)
 	spin_lock_irqsave(&dd->eep_st_lock, flags);
 	traffic_wds -= dd->traffic_wds;
 	dd->traffic_wds += traffic_wds;
+	if (traffic_wds  >= QIB_TRAFFIC_ACTIVE_THRESHOLD)
+		atomic_add(5, &dd->active_time); /* S/B #define */
 	spin_unlock_irqrestore(&dd->eep_st_lock, flags);
 
 	qib_chk_6120_errormask(dd);
@@ -2930,7 +2929,6 @@ bail:
 static int qib_6120_set_loopback(struct qib_pportdata *ppd, const char *what)
 {
 	int ret = 0;
-
 	if (!strncmp(what, "ibc", 3)) {
 		ppd->dd->cspec->ibcctrl |= SYM_MASK(IBCCtrl, Loopback);
 		qib_devinfo(ppd->dd->pcidev, "Enabling IB%u:%u IBC loopback\n",
@@ -3172,7 +3170,6 @@ static void get_6120_chip_params(struct qib_devdata *dd)
 static void set_6120_baseaddrs(struct qib_devdata *dd)
 {
 	u32 cregbase;
-
 	cregbase = qib_read_kreg32(dd, kr_counterregbase);
 	dd->cspec->cregbase = (u64 __iomem *)
 		((char __iomem *) dd->kregbase + cregbase);
@@ -3268,9 +3265,7 @@ static int init_6120_variables(struct qib_devdata *dd)
 
 	dd->eep_st_masks[2].errs_to_log = ERR_MASK(ResetNegated);
 
-	ret = qib_init_pportdata(ppd, dd, 0, 1);
-	if (ret)
-		goto bail;
+	qib_init_pportdata(ppd, dd, 0, 1);
 	ppd->link_width_supported = IB_WIDTH_1X | IB_WIDTH_4X;
 	ppd->link_speed_supported = QIB_IB_SDR;
 	ppd->link_width_enabled = IB_WIDTH_4X;
@@ -3468,13 +3463,6 @@ static int qib_6120_tempsense_rd(struct qib_devdata *dd, int regnum)
 	return -ENXIO;
 }
 
-#ifdef CONFIG_INFINIBAND_QIB_DCA
-static int qib_6120_notify_dca(struct qib_devdata *dd, unsigned long event)
-{
-	return 0;
-}
-#endif
-
 /* Dummy function, as 6120 boards never disable EEPROM Write */
 static int qib_6120_eeprom_wen(struct qib_devdata *dd, int wen)
 {
@@ -3550,9 +3538,6 @@ struct qib_devdata *qib_init_iba6120_funcs(struct pci_dev *pdev,
 	dd->f_xgxs_reset        = qib_6120_xgxs_reset;
 	dd->f_writescratch      = writescratch;
 	dd->f_tempsense_rd	= qib_6120_tempsense_rd;
-#ifdef CONFIG_INFINIBAND_QIB_DCA
-	dd->f_notify_dca = qib_6120_notify_dca;
-#endif
 	/*
 	 * Do remaining pcie setup and save pcie values in dd.
 	 * Any error printing is already done by the init code.

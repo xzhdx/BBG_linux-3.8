@@ -102,12 +102,15 @@
 #define HWCAP_S390_ETF3EH	256
 #define HWCAP_S390_HIGH_GPRS	512
 #define HWCAP_S390_TE		1024
-#define HWCAP_S390_VXRS		2048
 
 /*
  * These are used to set parameters in the core dumps.
  */
+#ifndef CONFIG_64BIT
+#define ELF_CLASS	ELFCLASS32
+#else /* CONFIG_64BIT */
 #define ELF_CLASS	ELFCLASS64
+#endif /* CONFIG_64BIT */
 #define ELF_DATA	ELFDATA2MSB
 #define ELF_ARCH	EM_S390
 
@@ -116,8 +119,6 @@
  */
 
 #include <asm/ptrace.h>
-#include <asm/compat.h>
-#include <asm/syscall.h>
 #include <asm/user.h>
 
 typedef s390_fp_regs elf_fpregset_t;
@@ -157,11 +158,10 @@ extern unsigned int vdso_enabled;
 /* This is the location that an ET_DYN program is loaded if exec'ed.  Typical
    use of this is to invoke "./ld.so someprog" to test out a new version of
    the loader.  We need to make sure that it is out of the way of the program
-   that it will "exec", and that there is sufficient room for the brk. 64-bit
-   tasks are aligned to 4GB. */
-#define ELF_ET_DYN_BASE (is_32bit_task() ? \
-				(STACK_TOP / 3 * 2) : \
-				(STACK_TOP / 3 * 2) & ~((1UL << 32) - 1))
+   that it will "exec", and that there is sufficient room for the brk.  */
+
+extern unsigned long randomize_et_dyn(unsigned long base);
+#define ELF_ET_DYN_BASE		(randomize_et_dyn(STACK_TOP / 3 * 2))
 
 /* This yields a mask that user programs can use to figure out what
    instruction set this CPU supports. */
@@ -180,35 +180,23 @@ extern unsigned long elf_hwcap;
 extern char elf_platform[];
 #define ELF_PLATFORM (elf_platform)
 
-#ifndef CONFIG_COMPAT
+#ifndef CONFIG_64BIT
 #define SET_PERSONALITY(ex) \
-do {								\
-	set_personality(PER_LINUX |				\
-		(current->personality & (~PER_MASK)));		\
-	current_thread_info()->sys_call_table = 		\
-		(unsigned long) &sys_call_table;		\
-} while (0)
-#else /* CONFIG_COMPAT */
+	set_personality(PER_LINUX | (current->personality & (~PER_MASK)))
+#else /* CONFIG_64BIT */
 #define SET_PERSONALITY(ex)					\
 do {								\
 	if (personality(current->personality) != PER_LINUX32)	\
 		set_personality(PER_LINUX |			\
 			(current->personality & ~PER_MASK));	\
-	if ((ex).e_ident[EI_CLASS] == ELFCLASS32) {		\
+	if ((ex).e_ident[EI_CLASS] == ELFCLASS32)		\
 		set_thread_flag(TIF_31BIT);			\
-		current_thread_info()->sys_call_table =		\
-			(unsigned long)	&sys_call_table_emu;	\
-	} else {						\
+	else							\
 		clear_thread_flag(TIF_31BIT);			\
-		current_thread_info()->sys_call_table =		\
-			(unsigned long) &sys_call_table;	\
-	}							\
 } while (0)
-#endif /* CONFIG_COMPAT */
+#endif /* CONFIG_64BIT */
 
-extern unsigned long mmap_rnd_mask;
-
-#define STACK_RND_MASK	(test_thread_flag(TIF_31BIT) ? 0x7ff : mmap_rnd_mask)
+#define STACK_RND_MASK	0x7ffUL
 
 #define ARCH_DLINFO							    \
 do {									    \
@@ -222,6 +210,9 @@ struct linux_binprm;
 #define ARCH_HAS_SETUP_ADDITIONAL_PAGES 1
 int arch_setup_additional_pages(struct linux_binprm *, int);
 
-void *fill_cpu_elf_notes(void *ptr, struct save_area *sa, __vector128 *vxrs);
+extern unsigned long arch_randomize_brk(struct mm_struct *mm);
+#define arch_randomize_brk arch_randomize_brk
+
+void *fill_cpu_elf_notes(void *ptr, struct save_area *sa);
 
 #endif

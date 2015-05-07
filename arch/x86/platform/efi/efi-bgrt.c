@@ -11,21 +11,20 @@
  * published by the Free Software Foundation.
  */
 #include <linux/kernel.h>
-#include <linux/init.h>
 #include <linux/acpi.h>
 #include <linux/efi.h>
 #include <linux/efi-bgrt.h>
 
 struct acpi_table_bgrt *bgrt_tab;
-void *__initdata bgrt_image;
-size_t __initdata bgrt_image_size;
+void *bgrt_image;
+size_t bgrt_image_size;
 
 struct bmp_header {
 	u16 id;
 	u32 size;
 } __packed;
 
-void __init efi_bgrt_init(void)
+void efi_bgrt_init(void)
 {
 	acpi_status status;
 	void __iomem *image;
@@ -40,59 +39,33 @@ void __init efi_bgrt_init(void)
 	if (ACPI_FAILURE(status))
 		return;
 
-	if (bgrt_tab->header.length < sizeof(*bgrt_tab)) {
-		pr_err("Ignoring BGRT: invalid length %u (expected %zu)\n",
-		       bgrt_tab->header.length, sizeof(*bgrt_tab));
+	if (bgrt_tab->header.length < sizeof(*bgrt_tab))
 		return;
-	}
-	if (bgrt_tab->version != 1) {
-		pr_err("Ignoring BGRT: invalid version %u (expected 1)\n",
-		       bgrt_tab->version);
+	if (bgrt_tab->version != 1)
 		return;
-	}
-	if (bgrt_tab->status != 1) {
-		pr_err("Ignoring BGRT: invalid status %u (expected 1)\n",
-		       bgrt_tab->status);
+	if (bgrt_tab->image_type != 0 || !bgrt_tab->image_address)
 		return;
-	}
-	if (bgrt_tab->image_type != 0) {
-		pr_err("Ignoring BGRT: invalid image type %u (expected 0)\n",
-		       bgrt_tab->image_type);
-		return;
-	}
-	if (!bgrt_tab->image_address) {
-		pr_err("Ignoring BGRT: null image address\n");
-		return;
-	}
 
 	image = efi_lookup_mapped_addr(bgrt_tab->image_address);
 	if (!image) {
-		image = early_ioremap(bgrt_tab->image_address,
-				       sizeof(bmp_header));
+		image = ioremap(bgrt_tab->image_address, sizeof(bmp_header));
 		ioremapped = true;
-		if (!image) {
-			pr_err("Ignoring BGRT: failed to map image header memory\n");
+		if (!image)
 			return;
-		}
 	}
 
 	memcpy_fromio(&bmp_header, image, sizeof(bmp_header));
 	if (ioremapped)
-		early_iounmap(image, sizeof(bmp_header));
+		iounmap(image);
 	bgrt_image_size = bmp_header.size;
 
-	bgrt_image = kmalloc(bgrt_image_size, GFP_KERNEL | __GFP_NOWARN);
-	if (!bgrt_image) {
-		pr_err("Ignoring BGRT: failed to allocate memory for image (wanted %zu bytes)\n",
-		       bgrt_image_size);
+	bgrt_image = kmalloc(bgrt_image_size, GFP_KERNEL);
+	if (!bgrt_image)
 		return;
-	}
 
 	if (ioremapped) {
-		image = early_ioremap(bgrt_tab->image_address,
-				       bmp_header.size);
+		image = ioremap(bgrt_tab->image_address, bmp_header.size);
 		if (!image) {
-			pr_err("Ignoring BGRT: failed to map image memory\n");
 			kfree(bgrt_image);
 			bgrt_image = NULL;
 			return;
@@ -101,5 +74,5 @@ void __init efi_bgrt_init(void)
 
 	memcpy_fromio(bgrt_image, image, bgrt_image_size);
 	if (ioremapped)
-		early_iounmap(image, bmp_header.size);
+		iounmap(image);
 }

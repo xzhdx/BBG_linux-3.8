@@ -401,7 +401,6 @@ static struct platform_pwm_backlight_data viper_backlight_data = {
 	.max_brightness	= 100,
 	.dft_brightness	= 100,
 	.pwm_period_ns	= 1000000,
-	.enable_gpio	= -1,
 	.init		= viper_backlight_init,
 	.notify		= viper_backlight_notify,
 	.exit		= viper_backlight_exit,
@@ -769,7 +768,7 @@ static unsigned long viper_tpm;
 
 static int __init viper_tpm_setup(char *str)
 {
-	return kstrtoul(str, 10, &viper_tpm) >= 0;
+	return strict_strtoul(str, 10, &viper_tpm) >= 0;
 }
 
 __setup("tpm=", viper_tpm_setup);
@@ -885,6 +884,9 @@ static int viper_cpufreq_notifier(struct notifier_block *nb,
 			viper_set_core_cpu_voltage(freq->new, 0);
 		}
 		break;
+	case CPUFREQ_RESUMECHANGE:
+		viper_set_core_cpu_voltage(freq->new, 0);
+		break;
 	default:
 		/* ignore */
 		break;
@@ -995,7 +997,7 @@ MACHINE_START(VIPER, "Arcom/Eurotech VIPER SBC")
 	.nr_irqs	= PXA_NR_IRQS,
 	.init_irq	= viper_init_irq,
 	.handle_irq	= pxa25x_handle_irq,
-	.init_time	= pxa_timer_init,
+	.timer          = &pxa_timer,
 	.init_machine	= viper_init,
 	.restart	= pxa_restart,
 MACHINE_END

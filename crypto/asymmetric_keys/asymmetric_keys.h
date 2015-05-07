@@ -9,10 +9,7 @@
  * 2 of the Licence, or (at your option) any later version.
  */
 
-extern struct asymmetric_key_id *asymmetric_key_hex_to_key_id(const char *id);
-
-static inline
-const struct asymmetric_key_ids *asymmetric_key_ids(const struct key *key)
+static inline const char *asymmetric_key_id(const struct key *key)
 {
 	return key->type_data.p[1];
 }

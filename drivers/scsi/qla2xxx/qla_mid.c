@@ -1,6 +1,6 @@
 /*
  * QLogic Fibre Channel HBA Driver
- * Copyright (c)  2003-2014 QLogic Corporation
+ * Copyright (c)  2003-2012 QLogic Corporation
  *
  * See LICENSE.qla2xxx for copyright and licensing details.
  */
@@ -306,25 +306,19 @@ qla2x00_vp_abort_isp(scsi_qla_host_t *vha)
 static int
 qla2x00_do_dpc_vp(scsi_qla_host_t *vha)
 {
-	struct qla_hw_data *ha = vha->hw;
-	scsi_qla_host_t *base_vha = pci_get_drvdata(ha->pdev);
-
 	ql_dbg(ql_dbg_dpc + ql_dbg_verbose, vha, 0x4012,
 	    "Entering %s vp_flags: 0x%lx.\n", __func__, vha->vp_flags);
 
 	qla2x00_do_work(vha);
 
-	/* Check if Fw is ready to configure VP first */
-	if (test_bit(VP_CONFIG_OK, &base_vha->vp_flags)) {
-		if (test_and_clear_bit(VP_IDX_ACQUIRED, &vha->vp_flags)) {
-			/* VP acquired. complete port configuration */
-			ql_dbg(ql_dbg_dpc, vha, 0x4014,
-			    "Configure VP scheduled.\n");
-			qla24xx_configure_vp(vha);
-			ql_dbg(ql_dbg_dpc, vha, 0x4015,
-			    "Configure VP end.\n");
-			return 0;
-		}
+	if (test_and_clear_bit(VP_IDX_ACQUIRED, &vha->vp_flags)) {
+		/* VP acquired. complete port configuration */
+		ql_dbg(ql_dbg_dpc, vha, 0x4014,
+		    "Configure VP scheduled.\n");
+		qla24xx_configure_vp(vha);
+		ql_dbg(ql_dbg_dpc, vha, 0x4015,
+		    "Configure VP end.\n");
+		return 0;
 	}
 
 	if (test_bit(FCPORT_UPDATE_NEEDED, &vha->dpc_flags)) {
@@ -529,7 +523,6 @@ qla25xx_free_req_que(struct scsi_qla_host *vha, struct req_que *req)
 		clear_bit(que_id, ha->req_qid_map);
 		mutex_unlock(&ha->vport_lock);
 	}
-	kfree(req->outstanding_cmds);
 	kfree(req);
 	req = NULL;
 }
@@ -636,7 +629,7 @@ qla25xx_create_req_que(struct qla_hw_data *ha, uint16_t options,
 	struct req_que *req = NULL;
 	struct scsi_qla_host *base_vha = pci_get_drvdata(ha->pdev);
 	uint16_t que_id = 0;
-	device_reg_t *reg;
+	device_reg_t __iomem *reg;
 	uint32_t cnt;
 
 	req = kzalloc(sizeof(struct req_que), GFP_KERNEL);
@@ -655,10 +648,6 @@ qla25xx_create_req_que(struct qla_hw_data *ha, uint16_t options,
 		    "Failed to allocate memory for request_ring.\n");
 		goto que_failed;
 	}
-
-	ret = qla2x00_alloc_outstanding_cmds(ha, req);
-	if (ret != QLA_SUCCESS)
-		goto que_failed;
 
 	mutex_lock(&ha->vport_lock);
 	que_id = find_first_zero_bit(ha->req_qid_map, ha->max_req_queues);
@@ -696,7 +685,7 @@ qla25xx_create_req_que(struct qla_hw_data *ha, uint16_t options,
 	    "options=0x%x.\n", req->options);
 	ql_dbg(ql_dbg_init, base_vha, 0x00dd,
 	    "options=0x%x.\n", req->options);
-	for (cnt = 1; cnt < req->num_outstanding_cmds; cnt++)
+	for (cnt = 1; cnt < MAX_OUTSTANDING_COMMANDS; cnt++)
 		req->outstanding_cmds[cnt] = NULL;
 	req->current_outstanding_cmd = 1;
 
@@ -705,10 +694,7 @@ qla25xx_create_req_que(struct qla_hw_data *ha, uint16_t options,
 	req->cnt = req->length;
 	req->id = que_id;
 	reg = ISP_QUE_REG(ha, que_id);
-	req->req_q_in = &reg->isp25mq.req_q_in;
-	req->req_q_out = &reg->isp25mq.req_q_out;
 	req->max_q_depth = ha->req_q_map[0]->max_q_depth;
-	req->out_ptr = (void *)(req->ring + req->length);
 	mutex_unlock(&ha->vport_lock);
 	ql_dbg(ql_dbg_multiq, base_vha, 0xc004,
 	    "ring_ptr=%p ring_index=%d, "
@@ -761,7 +747,7 @@ qla25xx_create_rsp_que(struct qla_hw_data *ha, uint16_t options,
 	struct rsp_que *rsp = NULL;
 	struct scsi_qla_host *base_vha = pci_get_drvdata(ha->pdev);
 	uint16_t que_id = 0;
-	device_reg_t *reg;
+	device_reg_t __iomem *reg;
 
 	rsp = kzalloc(sizeof(struct rsp_que), GFP_KERNEL);
 	if (rsp == NULL) {
@@ -794,7 +780,7 @@ qla25xx_create_rsp_que(struct qla_hw_data *ha, uint16_t options,
 		rsp->msix = &ha->msix_entries[que_id + 1];
 	else
 		ql_log(ql_log_warn, base_vha, 0x00e3,
-		    "MSIX not enabled.\n");
+		    "MSIX not enalbled.\n");
 
 	ha->rsp_q_map[que_id] = rsp;
 	rsp->rid = rid;
@@ -818,7 +804,6 @@ qla25xx_create_rsp_que(struct qla_hw_data *ha, uint16_t options,
 	reg = ISP_QUE_REG(ha, que_id);
 	rsp->rsp_q_in = &reg->isp25mq.rsp_q_in;
 	rsp->rsp_q_out = &reg->isp25mq.rsp_q_out;
-	rsp->in_ptr = (void *)(rsp->ring + rsp->length);
 	mutex_unlock(&ha->vport_lock);
 	ql_dbg(ql_dbg_multiq, base_vha, 0xc00b,
 	    "options=%x id=%d rsp_q_in=%p rsp_q_out=%p",

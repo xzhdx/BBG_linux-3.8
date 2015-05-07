@@ -13,12 +13,14 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  *
  *****************************************************************************/
 
 #include <linux/module.h>
 #include <linux/kmod.h>
+#include <linux/init.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
 #include <linux/ethtool.h>
@@ -43,6 +45,7 @@
 #define EEPROM_MAC_OFFSET		(0x01)
 #define DEFAULT_TX_CSUM_ENABLE		(true)
 #define DEFAULT_RX_CSUM_ENABLE		(true)
+#define DEFAULT_TSO_ENABLE		(true)
 #define SMSC75XX_INTERNAL_PHY_ID	(1)
 #define SMSC75XX_TX_OVERHEAD		(8)
 #define MAX_RX_FIFO_SIZE		(20 * 1024)
@@ -1394,11 +1397,13 @@ static int smsc75xx_bind(struct usbnet *dev, struct usb_interface *intf)
 	}
 
 	dev->data[0] = (unsigned long)kzalloc(sizeof(struct smsc75xx_priv),
-					      GFP_KERNEL);
+		GFP_KERNEL);
 
 	pdata = (struct smsc75xx_priv *)(dev->data[0]);
-	if (!pdata)
+	if (!pdata) {
+		netdev_warn(dev->net, "Unable to allocate smsc75xx_priv\n");
 		return -ENOMEM;
+	}
 
 	pdata->dev = dev;
 
@@ -1407,14 +1412,17 @@ static int smsc75xx_bind(struct usbnet *dev, struct usb_interface *intf)
 
 	INIT_WORK(&pdata->set_multicast, smsc75xx_deferred_multicast_write);
 
-	if (DEFAULT_TX_CSUM_ENABLE)
+	if (DEFAULT_TX_CSUM_ENABLE) {
 		dev->net->features |= NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM;
-
+		if (DEFAULT_TSO_ENABLE)
+			dev->net->features |= NETIF_F_SG |
+				NETIF_F_TSO | NETIF_F_TSO6;
+	}
 	if (DEFAULT_RX_CSUM_ENABLE)
 		dev->net->features |= NETIF_F_RXCSUM;
 
 	dev->net->hw_features = NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM |
-				NETIF_F_RXCSUM;
+		NETIF_F_SG | NETIF_F_TSO | NETIF_F_TSO6 | NETIF_F_RXCSUM;
 
 	ret = smsc75xx_wait_ready(dev, 0);
 	if (ret < 0) {
@@ -2009,11 +2017,7 @@ static int smsc75xx_suspend(struct usb_interface *intf, pm_message_t message)
 	ret = smsc75xx_enter_suspend0(dev);
 
 done:
-	/*
-	 * TODO: resume() might need to handle the suspend failure
-	 * in system sleep
-	 */
-	if (ret && PMSG_IS_AUTO(message))
+	if (ret)
 		usbnet_resume(intf);
 	return ret;
 }
@@ -2106,10 +2110,6 @@ static void smsc75xx_rx_csum_offload(struct usbnet *dev, struct sk_buff *skb,
 
 static int smsc75xx_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
 {
-	/* This check is no longer done by usbnet */
-	if (skb->len < dev->net->hard_header_len)
-		return 0;
-
 	while (skb->len > 0) {
 		u32 rx_cmd_a, rx_cmd_b, align_count, size;
 		struct sk_buff *ax_skb;
@@ -2197,6 +2197,8 @@ static struct sk_buff *smsc75xx_tx_fixup(struct usbnet *dev,
 					 struct sk_buff *skb, gfp_t flags)
 {
 	u32 tx_cmd_a, tx_cmd_b;
+
+	skb_linearize(skb);
 
 	if (skb_headroom(skb) < SMSC75XX_TX_OVERHEAD) {
 		struct sk_buff *skb2 =

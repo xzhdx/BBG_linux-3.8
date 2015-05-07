@@ -17,7 +17,6 @@
 #include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/rtc.h>
-#include <linux/clk.h>
 
 /* These register offsets are relative to LP (Low Power) range */
 #define SNVS_LPCR		0x04
@@ -40,7 +39,6 @@ struct snvs_rtc_data {
 	void __iomem *ioaddr;
 	int irq;
 	spinlock_t lock;
-	struct clk *clk;
 };
 
 static u32 rtc_read_lp_counter(void __iomem *ioaddr)
@@ -254,25 +252,13 @@ static int snvs_rtc_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	data->ioaddr = devm_ioremap_resource(&pdev->dev, res);
-	if (IS_ERR(data->ioaddr))
-		return PTR_ERR(data->ioaddr);
+	data->ioaddr = devm_request_and_ioremap(&pdev->dev, res);
+	if (!data->ioaddr)
+		return -EADDRNOTAVAIL;
 
 	data->irq = platform_get_irq(pdev, 0);
 	if (data->irq < 0)
 		return data->irq;
-
-	data->clk = devm_clk_get(&pdev->dev, "snvs-rtc");
-	if (IS_ERR(data->clk)) {
-		data->clk = NULL;
-	} else {
-		ret = clk_prepare_enable(data->clk);
-		if (ret) {
-			dev_err(&pdev->dev,
-				"Could not prepare or enable the snvs clock\n");
-			return ret;
-		}
-	}
 
 	platform_set_drvdata(pdev, data);
 
@@ -294,24 +280,27 @@ static int snvs_rtc_probe(struct platform_device *pdev)
 	if (ret) {
 		dev_err(&pdev->dev, "failed to request irq %d: %d\n",
 			data->irq, ret);
-		goto error_rtc_device_register;
+		return ret;
 	}
 
-	data->rtc = devm_rtc_device_register(&pdev->dev, pdev->name,
+	data->rtc = rtc_device_register(pdev->name, &pdev->dev,
 					&snvs_rtc_ops, THIS_MODULE);
 	if (IS_ERR(data->rtc)) {
 		ret = PTR_ERR(data->rtc);
 		dev_err(&pdev->dev, "failed to register rtc: %d\n", ret);
-		goto error_rtc_device_register;
+		return ret;
 	}
 
 	return 0;
+}
 
-error_rtc_device_register:
-	if (data->clk)
-		clk_disable_unprepare(data->clk);
+static int snvs_rtc_remove(struct platform_device *pdev)
+{
+	struct snvs_rtc_data *data = platform_get_drvdata(pdev);
 
-	return ret;
+	rtc_device_unregister(data->rtc);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -322,41 +311,21 @@ static int snvs_rtc_suspend(struct device *dev)
 	if (device_may_wakeup(dev))
 		enable_irq_wake(data->irq);
 
-	if (data->clk)
-		clk_disable_unprepare(data->clk);
-
 	return 0;
 }
 
 static int snvs_rtc_resume(struct device *dev)
 {
 	struct snvs_rtc_data *data = dev_get_drvdata(dev);
-	int ret;
 
 	if (device_may_wakeup(dev))
 		disable_irq_wake(data->irq);
 
-	if (data->clk) {
-		ret = clk_prepare_enable(data->clk);
-		if (ret)
-			return ret;
-	}
-
 	return 0;
 }
-
-static const struct dev_pm_ops snvs_rtc_pm_ops = {
-	.suspend_noirq = snvs_rtc_suspend,
-	.resume_noirq = snvs_rtc_resume,
-};
-
-#define SNVS_RTC_PM_OPS	(&snvs_rtc_pm_ops)
-
-#else
-
-#define SNVS_RTC_PM_OPS	NULL
-
 #endif
+
+static SIMPLE_DEV_PM_OPS(snvs_rtc_pm_ops, snvs_rtc_suspend, snvs_rtc_resume);
 
 static const struct of_device_id snvs_dt_ids[] = {
 	{ .compatible = "fsl,sec-v4.0-mon-rtc-lp", },
@@ -367,10 +336,12 @@ MODULE_DEVICE_TABLE(of, snvs_dt_ids);
 static struct platform_driver snvs_rtc_driver = {
 	.driver = {
 		.name	= "snvs_rtc",
-		.pm	= SNVS_RTC_PM_OPS,
+		.owner	= THIS_MODULE,
+		.pm	= &snvs_rtc_pm_ops,
 		.of_match_table = snvs_dt_ids,
 	},
 	.probe		= snvs_rtc_probe,
+	.remove		= snvs_rtc_remove,
 };
 module_platform_driver(snvs_rtc_driver);
 

@@ -6,17 +6,6 @@
 # Licensed under the GPL
 #
 
-# select defconfig based on actual architecture
-ifeq ($(SUBARCH),x86)
-  ifeq ($(shell uname -m),x86_64)
-        KBUILD_DEFCONFIG := x86_64_defconfig
-  else
-        KBUILD_DEFCONFIG := i386_defconfig
-  endif
-else
-        KBUILD_DEFCONFIG := $(SUBARCH)_defconfig
-endif
-
 ARCH_DIR := arch/um
 OS := $(shell uname -s)
 # We require bash because the vmlinux link and loader script cpp use bash
@@ -33,18 +22,19 @@ MODE_INCLUDE	+= -I$(srctree)/$(ARCH_DIR)/include/shared/skas
 
 HEADER_ARCH 	:= $(SUBARCH)
 
-ifneq ($(filter $(SUBARCH),x86 x86_64 i386),)
-	HEADER_ARCH := x86
+# Additional ARCH settings for x86
+ifeq ($(SUBARCH),i386)
+        HEADER_ARCH := x86
 endif
-
-ifdef CONFIG_64BIT
+ifeq ($(SUBARCH),x86_64)
+        HEADER_ARCH := x86
 	KBUILD_CFLAGS += -mcmodel=large
 endif
 
 HOST_DIR := arch/$(HEADER_ARCH)
 
-include $(ARCH_DIR)/Makefile-skas
-include $(HOST_DIR)/Makefile.um
+include $(srctree)/$(ARCH_DIR)/Makefile-skas
+include $(srctree)/$(HOST_DIR)/Makefile.um
 
 core-y += $(HOST_DIR)/um/
 
@@ -73,7 +63,7 @@ USER_CFLAGS = $(patsubst $(KERNEL_DEFINES),,$(patsubst -D__KERNEL__,,\
 	$(filter -I%,$(CFLAGS)) -D_FILE_OFFSET_BITS=64 -idirafter include
 
 #This will adjust *FLAGS accordingly to the platform.
-include $(ARCH_DIR)/Makefile-os-$(OS)
+include $(srctree)/$(ARCH_DIR)/Makefile-os-$(OS)
 
 KBUILD_CPPFLAGS += -I$(srctree)/$(HOST_DIR)/include \
 		   -I$(srctree)/$(HOST_DIR)/include/uapi \
@@ -111,7 +101,8 @@ endef
 KBUILD_KCONFIG := $(HOST_DIR)/um/Kconfig
 
 archheaders:
-	$(Q)$(MAKE) KBUILD_SRC= ARCH=$(HEADER_ARCH) archheaders
+	$(Q)$(MAKE) -C '$(srctree)' KBUILD_SRC= \
+		ARCH=$(HEADER_ARCH) O='$(objtree)' archheaders
 
 archprepare: include/generated/user_constants.h
 

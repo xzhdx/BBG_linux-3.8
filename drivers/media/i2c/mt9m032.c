@@ -87,27 +87,9 @@
 #define MT9M032_RESTART					0x0b
 #define MT9M032_RESET					0x0d
 #define MT9M032_PLL_CONFIG1				0x11
-#define		MT9M032_PLL_CONFIG1_PREDIV_MASK		0x3f
+#define		MT9M032_PLL_CONFIG1_OUTDIV_MASK		0x3f
 #define		MT9M032_PLL_CONFIG1_MUL_SHIFT		8
 #define MT9M032_READ_MODE1				0x1e
-#define		MT9M032_READ_MODE1_OUTPUT_BAD_FRAMES	(1 << 13)
-#define		MT9M032_READ_MODE1_MAINTAIN_FRAME_RATE	(1 << 12)
-#define		MT9M032_READ_MODE1_XOR_LINE_VALID	(1 << 11)
-#define		MT9M032_READ_MODE1_CONT_LINE_VALID	(1 << 10)
-#define		MT9M032_READ_MODE1_INVERT_TRIGGER	(1 << 9)
-#define		MT9M032_READ_MODE1_SNAPSHOT		(1 << 8)
-#define		MT9M032_READ_MODE1_GLOBAL_RESET		(1 << 7)
-#define		MT9M032_READ_MODE1_BULB_EXPOSURE	(1 << 6)
-#define		MT9M032_READ_MODE1_INVERT_STROBE	(1 << 5)
-#define		MT9M032_READ_MODE1_STROBE_ENABLE	(1 << 4)
-#define		MT9M032_READ_MODE1_STROBE_START_TRIG1	(0 << 2)
-#define		MT9M032_READ_MODE1_STROBE_START_EXP	(1 << 2)
-#define		MT9M032_READ_MODE1_STROBE_START_SHUTTER	(2 << 2)
-#define		MT9M032_READ_MODE1_STROBE_START_TRIG2	(3 << 2)
-#define		MT9M032_READ_MODE1_STROBE_END_TRIG1	(0 << 0)
-#define		MT9M032_READ_MODE1_STROBE_END_EXP	(1 << 0)
-#define		MT9M032_READ_MODE1_STROBE_END_SHUTTER	(2 << 0)
-#define		MT9M032_READ_MODE1_STROBE_END_TRIG2	(3 << 0)
 #define MT9M032_READ_MODE2				0x20
 #define		MT9M032_READ_MODE2_VFLIP_SHIFT		15
 #define		MT9M032_READ_MODE2_HFLIP_SHIFT		14
@@ -124,8 +106,6 @@
 #define		MT9M032_GAIN_AMUL_SHIFT			6
 #define		MT9M032_GAIN_ANALOG_MASK		0x3f
 #define MT9M032_FORMATTER1				0x9e
-#define		MT9M032_FORMATTER1_PLL_P1_6		(1 << 8)
-#define		MT9M032_FORMATTER1_PARALLEL		(1 << 12)
 #define MT9M032_FORMATTER2				0x9f
 #define		MT9M032_FORMATTER2_DOUT_EN		0x1000
 #define		MT9M032_FORMATTER2_PIXCLK_EN		0x2000
@@ -141,6 +121,8 @@
 #define		MT9P031_PLL_CONTROL_PWROFF		0x0050
 #define		MT9P031_PLL_CONTROL_PWRON		0x0051
 #define		MT9P031_PLL_CONTROL_USEPLL		0x0052
+#define MT9P031_PLL_CONFIG2				0x11
+#define		MT9P031_PLL_CONFIG2_P1_DIV_MASK		0x1f
 
 struct mt9m032 {
 	struct v4l2_subdev subdev;
@@ -273,14 +255,13 @@ static int mt9m032_setup_pll(struct mt9m032 *sensor)
 		.n_max = 64,
 		.m_min = 16,
 		.m_max = 255,
-		.p1_min = 6,
-		.p1_max = 7,
+		.p1_min = 1,
+		.p1_max = 128,
 	};
 
 	struct i2c_client *client = v4l2_get_subdevdata(&sensor->subdev);
 	struct mt9m032_platform_data *pdata = sensor->pdata;
 	struct aptina_pll pll;
-	u16 reg_val;
 	int ret;
 
 	pll.ext_clock = pdata->ext_clock;
@@ -293,21 +274,18 @@ static int mt9m032_setup_pll(struct mt9m032 *sensor)
 	sensor->pix_clock = pdata->pix_clock;
 
 	ret = mt9m032_write(client, MT9M032_PLL_CONFIG1,
-			    (pll.m << MT9M032_PLL_CONFIG1_MUL_SHIFT) |
-			    ((pll.n - 1) & MT9M032_PLL_CONFIG1_PREDIV_MASK));
+			    (pll.m << MT9M032_PLL_CONFIG1_MUL_SHIFT)
+			    | (pll.p1 - 1));
+	if (!ret)
+		ret = mt9m032_write(client, MT9P031_PLL_CONFIG2, pll.n - 1);
 	if (!ret)
 		ret = mt9m032_write(client, MT9P031_PLL_CONTROL,
 				    MT9P031_PLL_CONTROL_PWRON |
 				    MT9P031_PLL_CONTROL_USEPLL);
 	if (!ret)		/* more reserved, Continuous, Master Mode */
-		ret = mt9m032_write(client, MT9M032_READ_MODE1, 0x8000 |
-				    MT9M032_READ_MODE1_STROBE_START_EXP |
-				    MT9M032_READ_MODE1_STROBE_END_SHUTTER);
-	if (!ret) {
-		reg_val = (pll.p1 == 6 ? MT9M032_FORMATTER1_PLL_P1_6 : 0)
-			| MT9M032_FORMATTER1_PARALLEL | 0x001e; /* 14-bit */
-		ret = mt9m032_write(client, MT9M032_FORMATTER1, reg_val);
-	}
+		ret = mt9m032_write(client, MT9M032_READ_MODE1, 0x8006);
+	if (!ret)		/* Set 14-bit mode, select 7 divider */
+		ret = mt9m032_write(client, MT9M032_FORMATTER1, 0x111e);
 
 	return ret;
 }
@@ -317,21 +295,21 @@ static int mt9m032_setup_pll(struct mt9m032 *sensor)
  */
 
 static int mt9m032_enum_mbus_code(struct v4l2_subdev *subdev,
-				  struct v4l2_subdev_pad_config *cfg,
+				  struct v4l2_subdev_fh *fh,
 				  struct v4l2_subdev_mbus_code_enum *code)
 {
 	if (code->index != 0)
 		return -EINVAL;
 
-	code->code = MEDIA_BUS_FMT_Y8_1X8;
+	code->code = V4L2_MBUS_FMT_Y8_1X8;
 	return 0;
 }
 
 static int mt9m032_enum_frame_size(struct v4l2_subdev *subdev,
-				   struct v4l2_subdev_pad_config *cfg,
+				   struct v4l2_subdev_fh *fh,
 				   struct v4l2_subdev_frame_size_enum *fse)
 {
-	if (fse->index != 0 || fse->code != MEDIA_BUS_FMT_Y8_1X8)
+	if (fse->index != 0 || fse->code != V4L2_MBUS_FMT_Y8_1X8)
 		return -EINVAL;
 
 	fse->min_width = MT9M032_COLUMN_SIZE_DEF;
@@ -345,18 +323,18 @@ static int mt9m032_enum_frame_size(struct v4l2_subdev *subdev,
 /**
  * __mt9m032_get_pad_crop() - get crop rect
  * @sensor: pointer to the sensor struct
- * @cfg: v4l2_subdev_pad_config for getting the try crop rect from
+ * @fh: file handle for getting the try crop rect from
  * @which: select try or active crop rect
  *
  * Returns a pointer the current active or fh relative try crop rect
  */
 static struct v4l2_rect *
-__mt9m032_get_pad_crop(struct mt9m032 *sensor, struct v4l2_subdev_pad_config *cfg,
+__mt9m032_get_pad_crop(struct mt9m032 *sensor, struct v4l2_subdev_fh *fh,
 		       enum v4l2_subdev_format_whence which)
 {
 	switch (which) {
 	case V4L2_SUBDEV_FORMAT_TRY:
-		return v4l2_subdev_get_try_crop(&sensor->subdev, cfg, 0);
+		return v4l2_subdev_get_try_crop(fh, 0);
 	case V4L2_SUBDEV_FORMAT_ACTIVE:
 		return &sensor->crop;
 	default:
@@ -367,18 +345,18 @@ __mt9m032_get_pad_crop(struct mt9m032 *sensor, struct v4l2_subdev_pad_config *cf
 /**
  * __mt9m032_get_pad_format() - get format
  * @sensor: pointer to the sensor struct
- * @cfg: v4l2_subdev_pad_config for getting the try format from
+ * @fh: file handle for getting the try format from
  * @which: select try or active format
  *
  * Returns a pointer the current active or fh relative try format
  */
 static struct v4l2_mbus_framefmt *
-__mt9m032_get_pad_format(struct mt9m032 *sensor, struct v4l2_subdev_pad_config *cfg,
+__mt9m032_get_pad_format(struct mt9m032 *sensor, struct v4l2_subdev_fh *fh,
 			 enum v4l2_subdev_format_whence which)
 {
 	switch (which) {
 	case V4L2_SUBDEV_FORMAT_TRY:
-		return v4l2_subdev_get_try_format(&sensor->subdev, cfg, 0);
+		return v4l2_subdev_get_try_format(fh, 0);
 	case V4L2_SUBDEV_FORMAT_ACTIVE:
 		return &sensor->format;
 	default:
@@ -387,20 +365,20 @@ __mt9m032_get_pad_format(struct mt9m032 *sensor, struct v4l2_subdev_pad_config *
 }
 
 static int mt9m032_get_pad_format(struct v4l2_subdev *subdev,
-				  struct v4l2_subdev_pad_config *cfg,
+				  struct v4l2_subdev_fh *fh,
 				  struct v4l2_subdev_format *fmt)
 {
 	struct mt9m032 *sensor = to_mt9m032(subdev);
 
 	mutex_lock(&sensor->lock);
-	fmt->format = *__mt9m032_get_pad_format(sensor, cfg, fmt->which);
+	fmt->format = *__mt9m032_get_pad_format(sensor, fh, fmt->which);
 	mutex_unlock(&sensor->lock);
 
 	return 0;
 }
 
 static int mt9m032_set_pad_format(struct v4l2_subdev *subdev,
-				  struct v4l2_subdev_pad_config *cfg,
+				  struct v4l2_subdev_fh *fh,
 				  struct v4l2_subdev_format *fmt)
 {
 	struct mt9m032 *sensor = to_mt9m032(subdev);
@@ -414,7 +392,7 @@ static int mt9m032_set_pad_format(struct v4l2_subdev *subdev,
 	}
 
 	/* Scaling is not supported, the format is thus fixed. */
-	fmt->format = *__mt9m032_get_pad_format(sensor, cfg, fmt->which);
+	fmt->format = *__mt9m032_get_pad_format(sensor, fh, fmt->which);
 	ret = 0;
 
 done:
@@ -422,25 +400,22 @@ done:
 	return ret;
 }
 
-static int mt9m032_get_pad_selection(struct v4l2_subdev *subdev,
-				     struct v4l2_subdev_pad_config *cfg,
-				     struct v4l2_subdev_selection *sel)
+static int mt9m032_get_pad_crop(struct v4l2_subdev *subdev,
+				struct v4l2_subdev_fh *fh,
+				struct v4l2_subdev_crop *crop)
 {
 	struct mt9m032 *sensor = to_mt9m032(subdev);
 
-	if (sel->target != V4L2_SEL_TGT_CROP)
-		return -EINVAL;
-
 	mutex_lock(&sensor->lock);
-	sel->r = *__mt9m032_get_pad_crop(sensor, cfg, sel->which);
+	crop->rect = *__mt9m032_get_pad_crop(sensor, fh, crop->which);
 	mutex_unlock(&sensor->lock);
 
 	return 0;
 }
 
-static int mt9m032_set_pad_selection(struct v4l2_subdev *subdev,
-				     struct v4l2_subdev_pad_config *cfg,
-				     struct v4l2_subdev_selection *sel)
+static int mt9m032_set_pad_crop(struct v4l2_subdev *subdev,
+				struct v4l2_subdev_fh *fh,
+				struct v4l2_subdev_crop *crop)
 {
 	struct mt9m032 *sensor = to_mt9m032(subdev);
 	struct v4l2_mbus_framefmt *format;
@@ -448,12 +423,9 @@ static int mt9m032_set_pad_selection(struct v4l2_subdev *subdev,
 	struct v4l2_rect rect;
 	int ret = 0;
 
-	if (sel->target != V4L2_SEL_TGT_CROP)
-		return -EINVAL;
-
 	mutex_lock(&sensor->lock);
 
-	if (sensor->streaming && sel->which == V4L2_SUBDEV_FORMAT_ACTIVE) {
+	if (sensor->streaming && crop->which == V4L2_SUBDEV_FORMAT_ACTIVE) {
 		ret = -EBUSY;
 		goto done;
 	}
@@ -461,35 +433,33 @@ static int mt9m032_set_pad_selection(struct v4l2_subdev *subdev,
 	/* Clamp the crop rectangle boundaries and align them to a multiple of 2
 	 * pixels to ensure a GRBG Bayer pattern.
 	 */
-	rect.left = clamp(ALIGN(sel->r.left, 2), MT9M032_COLUMN_START_MIN,
+	rect.left = clamp(ALIGN(crop->rect.left, 2), MT9M032_COLUMN_START_MIN,
 			  MT9M032_COLUMN_START_MAX);
-	rect.top = clamp(ALIGN(sel->r.top, 2), MT9M032_ROW_START_MIN,
+	rect.top = clamp(ALIGN(crop->rect.top, 2), MT9M032_ROW_START_MIN,
 			 MT9M032_ROW_START_MAX);
-	rect.width = clamp_t(unsigned int, ALIGN(sel->r.width, 2),
-			     MT9M032_COLUMN_SIZE_MIN, MT9M032_COLUMN_SIZE_MAX);
-	rect.height = clamp_t(unsigned int, ALIGN(sel->r.height, 2),
-			      MT9M032_ROW_SIZE_MIN, MT9M032_ROW_SIZE_MAX);
+	rect.width = clamp(ALIGN(crop->rect.width, 2), MT9M032_COLUMN_SIZE_MIN,
+			   MT9M032_COLUMN_SIZE_MAX);
+	rect.height = clamp(ALIGN(crop->rect.height, 2), MT9M032_ROW_SIZE_MIN,
+			    MT9M032_ROW_SIZE_MAX);
 
-	rect.width = min_t(unsigned int, rect.width,
-			   MT9M032_PIXEL_ARRAY_WIDTH - rect.left);
-	rect.height = min_t(unsigned int, rect.height,
-			    MT9M032_PIXEL_ARRAY_HEIGHT - rect.top);
+	rect.width = min(rect.width, MT9M032_PIXEL_ARRAY_WIDTH - rect.left);
+	rect.height = min(rect.height, MT9M032_PIXEL_ARRAY_HEIGHT - rect.top);
 
-	__crop = __mt9m032_get_pad_crop(sensor, cfg, sel->which);
+	__crop = __mt9m032_get_pad_crop(sensor, fh, crop->which);
 
 	if (rect.width != __crop->width || rect.height != __crop->height) {
 		/* Reset the output image size if the crop rectangle size has
 		 * been modified.
 		 */
-		format = __mt9m032_get_pad_format(sensor, cfg, sel->which);
+		format = __mt9m032_get_pad_format(sensor, fh, crop->which);
 		format->width = rect.width;
 		format->height = rect.height;
 	}
 
 	*__crop = rect;
-	sel->r = rect;
+	crop->rect = rect;
 
-	if (sel->which == V4L2_SUBDEV_FORMAT_ACTIVE)
+	if (crop->which == V4L2_SUBDEV_FORMAT_ACTIVE)
 		ret = mt9m032_update_geom_timing(sensor);
 
 done:
@@ -562,8 +532,10 @@ static int mt9m032_g_register(struct v4l2_subdev *sd,
 	struct i2c_client *client = v4l2_get_subdevdata(&sensor->subdev);
 	int val;
 
-	if (reg->reg > 0xff)
+	if (reg->match.type != V4L2_CHIP_MATCH_I2C_ADDR || reg->reg > 0xff)
 		return -EINVAL;
+	if (reg->match.addr != client->addr)
+		return -ENODEV;
 
 	val = mt9m032_read(client, reg->reg);
 	if (val < 0)
@@ -576,13 +548,16 @@ static int mt9m032_g_register(struct v4l2_subdev *sd,
 }
 
 static int mt9m032_s_register(struct v4l2_subdev *sd,
-			      const struct v4l2_dbg_register *reg)
+			      struct v4l2_dbg_register *reg)
 {
 	struct mt9m032 *sensor = to_mt9m032(sd);
 	struct i2c_client *client = v4l2_get_subdevdata(&sensor->subdev);
 
-	if (reg->reg > 0xff)
+	if (reg->match.type != V4L2_CHIP_MATCH_I2C_ADDR || reg->reg > 0xff)
 		return -EINVAL;
+
+	if (reg->match.addr != client->addr)
+		return -ENODEV;
 
 	return mt9m032_write(client, reg->reg, reg->val);
 }
@@ -696,8 +671,8 @@ static const struct v4l2_subdev_pad_ops mt9m032_pad_ops = {
 	.enum_frame_size = mt9m032_enum_frame_size,
 	.get_fmt = mt9m032_get_pad_format,
 	.set_fmt = mt9m032_set_pad_format,
-	.set_selection = mt9m032_set_pad_selection,
-	.get_selection = mt9m032_get_pad_selection,
+	.set_crop = mt9m032_set_pad_crop,
+	.get_crop = mt9m032_get_pad_crop,
 };
 
 static const struct v4l2_subdev_ops mt9m032_ops = {
@@ -733,7 +708,7 @@ static int mt9m032_probe(struct i2c_client *client,
 	if (!client->dev.platform_data)
 		return -ENODEV;
 
-	sensor = devm_kzalloc(&client->dev, sizeof(*sensor), GFP_KERNEL);
+	sensor = kzalloc(sizeof(*sensor), GFP_KERNEL);
 	if (sensor == NULL)
 		return -ENOMEM;
 
@@ -765,7 +740,7 @@ static int mt9m032_probe(struct i2c_client *client,
 
 	sensor->format.width = sensor->crop.width;
 	sensor->format.height = sensor->crop.height;
-	sensor->format.code = MEDIA_BUS_FMT_Y8_1X8;
+	sensor->format.code = V4L2_MBUS_FMT_Y8_1X8;
 	sensor->format.field = V4L2_FIELD_NONE;
 	sensor->format.colorspace = V4L2_COLORSPACE_SRGB;
 
@@ -863,6 +838,7 @@ error_ctrl:
 	v4l2_ctrl_handler_free(&sensor->ctrls);
 error_sensor:
 	mutex_destroy(&sensor->lock);
+	kfree(sensor);
 	return ret;
 }
 
@@ -875,6 +851,7 @@ static int mt9m032_remove(struct i2c_client *client)
 	v4l2_ctrl_handler_free(&sensor->ctrls);
 	media_entity_cleanup(&subdev->entity);
 	mutex_destroy(&sensor->lock);
+	kfree(sensor);
 	return 0;
 }
 

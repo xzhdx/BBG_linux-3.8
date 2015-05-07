@@ -524,8 +524,11 @@ void stv0900_set_tuner(struct dvb_frontend *fe, u32 frequency,
 	struct dvb_frontend_ops *frontend_ops = NULL;
 	struct dvb_tuner_ops *tuner_ops = NULL;
 
-	frontend_ops = &fe->ops;
-	tuner_ops = &frontend_ops->tuner_ops;
+	if (&fe->ops)
+		frontend_ops = &fe->ops;
+
+	if (&frontend_ops->tuner_ops)
+		tuner_ops = &frontend_ops->tuner_ops;
 
 	if (tuner_ops->set_frequency) {
 		if ((tuner_ops->set_frequency(fe, frequency)) < 0)
@@ -549,8 +552,11 @@ void stv0900_set_bandwidth(struct dvb_frontend *fe, u32 bandwidth)
 	struct dvb_frontend_ops *frontend_ops = NULL;
 	struct dvb_tuner_ops *tuner_ops = NULL;
 
-	frontend_ops = &fe->ops;
-	tuner_ops = &frontend_ops->tuner_ops;
+	if (&fe->ops)
+		frontend_ops = &fe->ops;
+
+	if (&frontend_ops->tuner_ops)
+		tuner_ops = &frontend_ops->tuner_ops;
 
 	if (tuner_ops->set_bandwidth) {
 		if ((tuner_ops->set_bandwidth(fe, bandwidth)) < 0)
@@ -1270,6 +1276,7 @@ enum fe_stv0900_error stv0900_st_dvbs2_single(struct stv0900_internal *intp,
 					enum fe_stv0900_demod_mode LDPC_Mode,
 					enum fe_stv0900_demod_num demod)
 {
+	enum fe_stv0900_error error = STV0900_NO_ERROR;
 	s32 reg_ind;
 
 	dprintk("%s\n", __func__);
@@ -1336,7 +1343,7 @@ enum fe_stv0900_error stv0900_st_dvbs2_single(struct stv0900_internal *intp,
 		break;
 	}
 
-	return STV0900_NO_ERROR;
+	return error;
 }
 
 static enum fe_stv0900_error stv0900_init_internal(struct dvb_frontend *fe,
@@ -1551,25 +1558,6 @@ static int stv0900_status(struct stv0900_internal *intp,
 	return locked;
 }
 
-static int stv0900_set_mis(struct stv0900_internal *intp,
-				enum fe_stv0900_demod_num demod, int mis)
-{
-	dprintk("%s\n", __func__);
-
-	if (mis < 0 || mis > 255) {
-		dprintk("Disable MIS filtering\n");
-		stv0900_write_bits(intp, FILTER_EN, 0);
-	} else {
-		dprintk("Enable MIS filtering - %d\n", mis);
-		stv0900_write_bits(intp, FILTER_EN, 1);
-		stv0900_write_reg(intp, ISIENTRY, mis);
-		stv0900_write_reg(intp, ISIBITENA, 0xff);
-	}
-
-	return STV0900_NO_ERROR;
-}
-
-
 static enum dvbfe_search stv0900_search(struct dvb_frontend *fe)
 {
 	struct stv0900_state *state = fe->demodulator_priv;
@@ -1589,8 +1577,6 @@ static enum dvbfe_search stv0900_search(struct dvb_frontend *fe)
 
 	if (state->config->set_ts_params)
 		state->config->set_ts_params(fe, 0);
-
-	stv0900_set_mis(intp, demod, c->stream_id);
 
 	p_result.locked = FALSE;
 	p_search.path = demod;
@@ -1948,9 +1934,6 @@ struct dvb_frontend *stv0900_attach(const struct stv0900_config *config,
 
 		if (err_stv0900)
 			goto error;
-
-		if (state->internal->chip_id >= 0x30)
-			state->frontend.ops.info.caps |= FE_CAN_MULTISTREAM;
 
 		break;
 	default:

@@ -26,16 +26,7 @@
 #include "../wlcore/acx.h"
 
 enum {
-	ACX_NS_IPV6_FILTER		 = 0x0050,
-	ACX_PEER_HT_OPERATION_MODE_CFG	 = 0x0051,
-	ACX_CSUM_CONFIG			 = 0x0052,
-	ACX_SIM_CONFIG			 = 0x0053,
-	ACX_CLEAR_STATISTICS		 = 0x0054,
-	ACX_AUTO_RX_STREAMING		 = 0x0055,
-	ACX_PEER_CAP			 = 0x0056,
-	ACX_INTERRUPT_NOTIFY		 = 0x0057,
-	ACX_RX_BA_FILTER		 = 0x0058,
-	ACX_AP_SLEEP_CFG                 = 0x0059
+	ACX_CLEAR_STATISTICS		 = 0x0047,
 };
 
 /* numbers of bits the length field takes (add 1 for the actual number) */
@@ -287,98 +278,10 @@ struct wl18xx_acx_clear_statistics {
 	struct acx_header header;
 };
 
-enum wlcore_bandwidth {
-	WLCORE_BANDWIDTH_20MHZ,
-	WLCORE_BANDWIDTH_40MHZ,
-};
-
-struct wlcore_peer_ht_operation_mode {
-	struct acx_header header;
-
-	u8 hlid;
-	u8 bandwidth; /* enum wlcore_bandwidth */
-	u8 padding[2];
-};
-
-/*
- * ACX_PEER_CAP
- * this struct is very similar to wl1271_acx_ht_capabilities, with the
- * addition of supported rates
- */
-struct wlcore_acx_peer_cap {
-	struct acx_header header;
-
-	/* bitmask of capability bits supported by the peer */
-	__le32 ht_capabilites;
-
-	/* rates supported by the remote peer */
-	__le32 supported_rates;
-
-	/* Indicates to which link these capabilities apply. */
-	u8 hlid;
-
-	/*
-	 * This the maximum A-MPDU length supported by the AP. The FW may not
-	 * exceed this length when sending A-MPDUs
-	 */
-	u8 ampdu_max_length;
-
-	/* This is the minimal spacing required when sending A-MPDUs to the AP*/
-	u8 ampdu_min_spacing;
-
-	u8 padding;
-} __packed;
-
-/*
- * ACX_INTERRUPT_NOTIFY
- * enable/disable fast-link/PSM notification from FW
- */
-struct wl18xx_acx_interrupt_notify {
-	struct acx_header header;
-	u32 enable;
-};
-
-/*
- * ACX_RX_BA_FILTER
- * enable/disable RX BA filtering in FW
- */
-struct wl18xx_acx_rx_ba_filter {
-	struct acx_header header;
-	u32 enable;
-};
-
-struct acx_ap_sleep_cfg {
-	struct acx_header header;
-	/* Duty Cycle (20-80% of staying Awake) for IDLE AP
-	 * (0: disable)
-	 */
-	u8 idle_duty_cycle;
-	/* Duty Cycle (20-80% of staying Awake) for Connected AP
-	 * (0: disable)
-	 */
-	u8 connected_duty_cycle;
-	/* Maximum stations that are allowed to be connected to AP
-	 *  (255: no limit)
-	 */
-	u8 max_stations_thresh;
-	/* Timeout till enabling the Sleep Mechanism after data stops
-	 * [unit: 100 msec]
-	 */
-	u8 idle_conn_thresh;
-} __packed;
-
 int wl18xx_acx_host_if_cfg_bitmap(struct wl1271 *wl, u32 host_cfg_bitmap,
 				  u32 sdio_blk_size, u32 extra_mem_blks,
 				  u32 len_field_size);
 int wl18xx_acx_set_checksum_state(struct wl1271 *wl);
 int wl18xx_acx_clear_statistics(struct wl1271 *wl);
-int wl18xx_acx_peer_ht_operation_mode(struct wl1271 *wl, u8 hlid, bool wide);
-int wl18xx_acx_set_peer_cap(struct wl1271 *wl,
-			    struct ieee80211_sta_ht_cap *ht_cap,
-			    bool allow_ht_operation,
-			    u32 rate_set, u8 hlid);
-int wl18xx_acx_interrupt_notify_config(struct wl1271 *wl, bool action);
-int wl18xx_acx_rx_ba_filter(struct wl1271 *wl, bool action);
-int wl18xx_acx_ap_sleep(struct wl1271 *wl);
 
 #endif /* __WL18XX_ACX_H__ */

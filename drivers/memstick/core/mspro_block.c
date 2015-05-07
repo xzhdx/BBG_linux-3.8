@@ -204,7 +204,7 @@ static int mspro_block_bd_open(struct block_device *bdev, fmode_t mode)
 }
 
 
-static void mspro_block_disk_release(struct gendisk *disk)
+static int mspro_block_disk_release(struct gendisk *disk)
 {
 	struct mspro_block_data *msb = disk->private_data;
 	int disk_id = MINOR(disk_devt(disk)) >> MSPRO_BLOCK_PART_SHIFT;
@@ -224,11 +224,13 @@ static void mspro_block_disk_release(struct gendisk *disk)
 	}
 
 	mutex_unlock(&mspro_block_disk_lock);
+
+	return 0;
 }
 
-static void mspro_block_bd_release(struct gendisk *disk, fmode_t mode)
+static int mspro_block_bd_release(struct gendisk *disk, fmode_t mode)
 {
-	mspro_block_disk_release(disk);
+	return mspro_block_disk_release(disk);
 }
 
 static int mspro_block_bd_getgeo(struct block_device *bdev,
@@ -758,7 +760,7 @@ static int mspro_block_complete_req(struct memstick_dev *card, int error)
 
 		if (error || (card->current_mrq.tpc == MSPRO_CMD_STOP)) {
 			if (msb->data_dir == READ) {
-				for (cnt = 0; cnt < msb->current_seg; cnt++) {
+				for (cnt = 0; cnt < msb->current_seg; cnt++)
 					t_len += msb->req_sg[cnt].length
 						 / msb->page_size;
 
@@ -766,7 +768,6 @@ static int mspro_block_complete_req(struct memstick_dev *card, int error)
 						t_len += msb->current_page - 1;
 
 					t_len *= msb->page_size;
-				}
 			}
 		} else
 			t_len = blk_rq_bytes(msb->block_req);
@@ -1024,8 +1025,8 @@ static int mspro_block_read_attributes(struct memstick_dev *card)
 	} else
 		attr_count = attr->count;
 
-	msb->attr_group.attrs = kcalloc(attr_count + 1,
-					sizeof(*msb->attr_group.attrs),
+	msb->attr_group.attrs = kzalloc((attr_count + 1)
+					* sizeof(struct attribute),
 					GFP_KERNEL);
 	if (!msb->attr_group.attrs) {
 		rc = -ENOMEM;
@@ -1212,10 +1213,21 @@ static int mspro_block_init_disk(struct memstick_dev *card)
 	msb->page_size = be16_to_cpu(sys_info->unit_size);
 
 	mutex_lock(&mspro_block_disk_lock);
-	disk_id = idr_alloc(&mspro_block_disk_idr, card, 0, 256, GFP_KERNEL);
+	if (!idr_pre_get(&mspro_block_disk_idr, GFP_KERNEL)) {
+		mutex_unlock(&mspro_block_disk_lock);
+		return -ENOMEM;
+	}
+
+	rc = idr_get_new(&mspro_block_disk_idr, card, &disk_id);
 	mutex_unlock(&mspro_block_disk_lock);
-	if (disk_id < 0)
-		return disk_id;
+
+	if (rc)
+		return rc;
+
+	if ((disk_id << MSPRO_BLOCK_PART_SHIFT) > 255) {
+		rc = -ENOSPC;
+		goto out_release_id;
+	}
 
 	msb->disk = alloc_disk(1 << MSPRO_BLOCK_PART_SHIFT);
 	if (!msb->disk) {

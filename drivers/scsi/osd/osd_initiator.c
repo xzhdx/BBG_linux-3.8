@@ -7,7 +7,7 @@
  * Copyright (C) 2008 Panasas Inc.  All rights reserved.
  *
  * Authors:
- *   Boaz Harrosh <ooo@electrozaur.com>
+ *   Boaz Harrosh <bharrosh@panasas.com>
  *   Benny Halevy <bhalevy@panasas.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -57,7 +57,7 @@
 
 enum { OSD_REQ_RETRIES = 1 };
 
-MODULE_AUTHOR("Boaz Harrosh <ooo@electrozaur.com>");
+MODULE_AUTHOR("Boaz Harrosh <bharrosh@panasas.com>");
 MODULE_DESCRIPTION("open-osd initiator library libosd.ko");
 MODULE_LICENSE("GPL");
 
@@ -144,10 +144,6 @@ static int _osd_get_print_system_info(struct osd_dev *od,
 	odi->osdname_len = get_attrs[a].len;
 	/* Avoid NULL for memcmp optimization 0-length is good enough */
 	odi->osdname = kzalloc(odi->osdname_len + 1, GFP_KERNEL);
-	if (!odi->osdname) {
-		ret = -ENOMEM;
-		goto out;
-	}
 	if (odi->osdname_len)
 		memcpy(odi->osdname, get_attrs[a].val_ptr, odi->osdname_len);
 	OSD_INFO("OSD_NAME               [%s]\n", odi->osdname);
@@ -186,7 +182,7 @@ static int _osd_get_print_system_info(struct osd_dev *od,
 
 		if (unlikely(len > sizeof(odi->systemid))) {
 			OSD_ERR("OSD Target error: OSD_SYSTEM_ID too long(%d). "
-				"device identification might not work\n", len);
+				"device idetification might not work\n", len);
 			len = sizeof(odi->systemid);
 		}
 		odi->systemid_len = len;
@@ -731,7 +727,7 @@ static int _osd_req_list_objects(struct osd_request *or,
 
 	bio->bi_rw &= ~REQ_WRITE;
 	or->in.bio = bio;
-	or->in.total_bytes = bio->bi_iter.bi_size;
+	or->in.total_bytes = bio->bi_size;
 	return 0;
 }
 
@@ -1049,7 +1045,7 @@ static struct bio *_create_sg_bios(struct osd_request *or,
 
 	bio = bio_kmalloc(GFP_KERNEL, numentries);
 	if (unlikely(!bio)) {
-		OSD_DEBUG("Failed to allocate BIO size=%u\n", numentries);
+		OSD_DEBUG("Faild to allocate BIO size=%u\n", numentries);
 		return ERR_PTR(-ENOMEM);
 	}
 
@@ -1567,10 +1563,9 @@ static struct request *_make_request(struct request_queue *q, bool has_write,
 		struct request *req;
 
 		req = blk_get_request(q, has_write ? WRITE : READ, flags);
-		if (IS_ERR(req))
-			return req;
+		if (unlikely(!req))
+			return ERR_PTR(-ENOMEM);
 
-		blk_rq_set_block_pc(req);
 		return req;
 	}
 }
@@ -1591,6 +1586,7 @@ static int _init_blk_request(struct osd_request *or,
 	}
 
 	or->request = req;
+	req->cmd_type = REQ_TYPE_BLOCK_PC;
 	req->cmd_flags |= REQ_QUIET;
 
 	req->timeout = or->timeout;
@@ -1608,7 +1604,7 @@ static int _init_blk_request(struct osd_request *or,
 				ret = PTR_ERR(req);
 				goto out;
 			}
-			blk_rq_set_block_pc(req);
+			req->cmd_type = REQ_TYPE_BLOCK_PC;
 			or->in.req = or->request->next_rq = req;
 		}
 	} else if (has_in)

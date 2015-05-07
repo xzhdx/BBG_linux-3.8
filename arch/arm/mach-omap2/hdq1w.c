@@ -27,7 +27,6 @@
 #include <linux/err.h>
 #include <linux/platform_device.h>
 
-#include "soc.h"
 #include "omap_hwmod.h"
 #include "omap_device.h"
 #include "hdq1w.h"
@@ -67,8 +66,8 @@ int omap_hdq1w_reset(struct omap_hwmod *oh)
 			  MAX_MODULE_SOFTRESET_WAIT, c);
 
 	if (c == MAX_MODULE_SOFTRESET_WAIT)
-		pr_warn("%s: %s: softreset failed (waited %d usec)\n",
-			__func__, oh->name, MAX_MODULE_SOFTRESET_WAIT);
+		pr_warning("%s: %s: softreset failed (waited %d usec)\n",
+			   __func__, oh->name, MAX_MODULE_SOFTRESET_WAIT);
 	else
 		pr_debug("%s: %s: softreset in %d usec\n", __func__,
 			 oh->name, c);
@@ -76,7 +75,6 @@ int omap_hdq1w_reset(struct omap_hwmod *oh)
 	return 0;
 }
 
-#ifndef CONFIG_OF
 static int __init omap_init_hdq(void)
 {
 	int id = -1;
@@ -89,11 +87,10 @@ static int __init omap_init_hdq(void)
 	if (!oh)
 		return 0;
 
-	pdev = omap_device_build(devname, id, oh, NULL, 0);
+	pdev = omap_device_build(devname, id, oh, NULL, 0, NULL, 0, 0);
 	WARN(IS_ERR(pdev), "Can't build omap_device for %s:%s.\n",
 	     devname, oh->name);
 
 	return 0;
 }
-omap_arch_initcall(omap_init_hdq);
-#endif
+arch_initcall(omap_init_hdq);

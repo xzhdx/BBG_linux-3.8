@@ -7,7 +7,6 @@
 #include <linux/mm.h>
 #include <linux/memory.h>
 #include <linux/vmstat.h>
-#include <linux/notifier.h>
 #include <linux/node.h>
 #include <linux/hugetlb.h>
 #include <linux/compaction.h>
@@ -25,26 +24,32 @@ static struct bus_type node_subsys = {
 };
 
 
-static ssize_t node_read_cpumap(struct device *dev, bool list, char *buf)
+static ssize_t node_read_cpumap(struct device *dev, int type, char *buf)
 {
 	struct node *node_dev = to_node(dev);
 	const struct cpumask *mask = cpumask_of_node(node_dev->dev.id);
+	int len;
 
 	/* 2008/04/07: buf currently PAGE_SIZE, need 9 chars per 32 bits. */
 	BUILD_BUG_ON((NR_CPUS/32 * 9) > (PAGE_SIZE-1));
 
-	return cpumap_print_to_pagebuf(list, buf, mask);
+	len = type?
+		cpulist_scnprintf(buf, PAGE_SIZE-2, mask) :
+		cpumask_scnprintf(buf, PAGE_SIZE-2, mask);
+ 	buf[len++] = '\n';
+ 	buf[len] = '\0';
+	return len;
 }
 
 static inline ssize_t node_read_cpumask(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
-	return node_read_cpumap(dev, false, buf);
+	return node_read_cpumap(dev, 0, buf);
 }
 static inline ssize_t node_read_cpulist(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
-	return node_read_cpumap(dev, true, buf);
+	return node_read_cpumap(dev, 1, buf);
 }
 
 static DEVICE_ATTR(cpumap,  S_IRUGO, node_read_cpumask, NULL);
@@ -119,8 +124,14 @@ static ssize_t node_read_meminfo(struct device *dev,
 		       nid, K(node_page_state(nid, NR_WRITEBACK)),
 		       nid, K(node_page_state(nid, NR_FILE_PAGES)),
 		       nid, K(node_page_state(nid, NR_FILE_MAPPED)),
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+		       nid, K(node_page_state(nid, NR_ANON_PAGES)
+			+ node_page_state(nid, NR_ANON_TRANSPARENT_HUGEPAGES) *
+			HPAGE_PMD_NR),
+#else
 		       nid, K(node_page_state(nid, NR_ANON_PAGES)),
-		       nid, K(i.sharedram),
+#endif
+		       nid, K(node_page_state(nid, NR_SHMEM)),
 		       nid, node_page_state(nid, NR_KERNEL_STACK) *
 				THREAD_SIZE / 1024,
 		       nid, K(node_page_state(nid, NR_PAGETABLE)),
@@ -180,7 +191,7 @@ static ssize_t node_read_vmstat(struct device *dev,
 static DEVICE_ATTR(vmstat, S_IRUGO, node_read_vmstat, NULL);
 
 static ssize_t node_read_distance(struct device *dev,
-			struct device_attribute *attr, char *buf)
+			struct device_attribute *attr, char * buf)
 {
 	int nid = dev->id;
 	int len = 0;
@@ -199,17 +210,6 @@ static ssize_t node_read_distance(struct device *dev,
 	return len;
 }
 static DEVICE_ATTR(distance, S_IRUGO, node_read_distance, NULL);
-
-static struct attribute *node_dev_attrs[] = {
-	&dev_attr_cpumap.attr,
-	&dev_attr_cpulist.attr,
-	&dev_attr_meminfo.attr,
-	&dev_attr_numastat.attr,
-	&dev_attr_distance.attr,
-	&dev_attr_vmstat.attr,
-	NULL
-};
-ATTRIBUTE_GROUPS(node_dev);
 
 #ifdef CONFIG_HUGETLBFS
 /*
@@ -284,10 +284,18 @@ static int register_node(struct node *node, int num, struct node *parent)
 	node->dev.id = num;
 	node->dev.bus = &node_subsys;
 	node->dev.release = node_device_release;
-	node->dev.groups = node_dev_groups;
 	error = device_register(&node->dev);
 
 	if (!error){
+		device_create_file(&node->dev, &dev_attr_cpumap);
+		device_create_file(&node->dev, &dev_attr_cpulist);
+		device_create_file(&node->dev, &dev_attr_meminfo);
+		device_create_file(&node->dev, &dev_attr_numastat);
+		device_create_file(&node->dev, &dev_attr_distance);
+		device_create_file(&node->dev, &dev_attr_vmstat);
+
+		scan_unevictable_register_node(node);
+
 		hugetlb_register_node(node);
 
 		compaction_register_node(node);
@@ -304,6 +312,14 @@ static int register_node(struct node *node, int num, struct node *parent)
  */
 void unregister_node(struct node *node)
 {
+	device_remove_file(&node->dev, &dev_attr_cpumap);
+	device_remove_file(&node->dev, &dev_attr_cpulist);
+	device_remove_file(&node->dev, &dev_attr_meminfo);
+	device_remove_file(&node->dev, &dev_attr_numastat);
+	device_remove_file(&node->dev, &dev_attr_distance);
+	device_remove_file(&node->dev, &dev_attr_vmstat);
+
+	scan_unevictable_unregister_node(node);
 	hugetlb_unregister_node(node);		/* no-op, if memoryless node */
 
 	device_unregister(&node->dev);
@@ -588,9 +604,6 @@ int register_one_node(int nid)
 
 void unregister_one_node(int nid)
 {
-	if (!node_devices[nid])
-		return;
-
 	unregister_node(node_devices[nid]);
 	node_devices[nid] = NULL;
 }
@@ -603,8 +616,7 @@ static ssize_t print_nodes_state(enum node_states state, char *buf)
 {
 	int n;
 
-	n = scnprintf(buf, PAGE_SIZE - 1, "%*pbl",
-		      nodemask_pr_args(&node_states[state]));
+	n = nodelist_scnprintf(buf, PAGE_SIZE-2, node_states[state]);
 	buf[n++] = '\n';
 	buf[n] = '\0';
 	return n;
@@ -671,11 +683,8 @@ static int __init register_node_type(void)
 
 	ret = subsys_system_register(&node_subsys, cpu_root_attr_groups);
 	if (!ret) {
-		static struct notifier_block node_memory_callback_nb = {
-			.notifier_call = node_memory_callback,
-			.priority = NODE_CALLBACK_PRI,
-		};
-		register_hotmemory_notifier(&node_memory_callback_nb);
+		hotplug_memory_notifier(node_memory_callback,
+					NODE_CALLBACK_PRI);
 	}
 
 	/*

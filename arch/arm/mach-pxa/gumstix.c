@@ -140,7 +140,8 @@ static void gumstix_setup_bt_clock(void)
 	int timeout = 500;
 
 	if (!(OSCC & OSCC_OOK))
-		pr_warn("32kHz clock was not on. Bootloader may need to be updated\n");
+		pr_warning("32kHz clock was not on. Bootloader may need to "
+				"be updated\n");
 	else
 		return;
 
@@ -237,7 +238,7 @@ MACHINE_START(GUMSTIX, "Gumstix")
 	.nr_irqs	= PXA_NR_IRQS,
 	.init_irq	= pxa25x_init_irq,
 	.handle_irq	= pxa25x_handle_irq,
-	.init_time	= pxa_timer_init,
+	.timer		= &pxa_timer,
 	.init_machine	= gumstix_init,
 	.restart	= pxa_restart,
 MACHINE_END

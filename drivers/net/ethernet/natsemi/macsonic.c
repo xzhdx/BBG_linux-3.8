@@ -37,6 +37,7 @@
 #include <linux/fcntl.h>
 #include <linux/gfp.h>
 #include <linux/interrupt.h>
+#include <linux/init.h>
 #include <linux/ioport.h>
 #include <linux/in.h>
 #include <linux/string.h>
@@ -51,6 +52,7 @@
 #include <linux/bitrev.h>
 #include <linux/slab.h>
 
+#include <asm/bootinfo.h>
 #include <asm/pgtable.h>
 #include <asm/io.h>
 #include <asm/hwtest.h>
@@ -200,13 +202,13 @@ static int macsonic_init(struct net_device *dev)
 
 	/* Allocate the entire chunk of memory for the descriptors.
            Note that this cannot cross a 64K boundary. */
-	lp->descriptors = dma_alloc_coherent(lp->device,
-					     SIZEOF_SONIC_DESC *
-					     SONIC_BUS_SCALE(lp->dma_bitmode),
-					     &lp->descriptors_laddr,
-					     GFP_KERNEL);
-	if (lp->descriptors == NULL)
+	if ((lp->descriptors = dma_alloc_coherent(lp->device,
+	            SIZEOF_SONIC_DESC * SONIC_BUS_SCALE(lp->dma_bitmode),
+	            &lp->descriptors_laddr, GFP_KERNEL)) == NULL) {
+		printk(KERN_ERR "%s: couldn't alloc DMA memory for descriptors.\n",
+		       dev_name(lp->device));
 		return -ENOMEM;
+	}
 
 	/* Now set up the pointers to point to the appropriate places */
 	lp->cda = lp->descriptors;
@@ -326,9 +328,13 @@ static int mac_onboard_sonic_probe(struct net_device *dev)
 	    macintosh_config->ident == MAC_MODEL_P588 ||
 	    macintosh_config->ident == MAC_MODEL_P575 ||
 	    macintosh_config->ident == MAC_MODEL_C610) {
+		unsigned long flags;
 		int card_present;
 
+		local_irq_save(flags);
 		card_present = hwreg_present((void*)ONBOARD_SONIC_REGISTERS);
+		local_irq_restore(flags);
+
 		if (!card_present) {
 			printk("none.\n");
 			return -ENODEV;
@@ -630,6 +636,7 @@ static struct platform_driver mac_sonic_driver = {
 	.remove = mac_sonic_device_remove,
 	.driver	= {
 		.name	= mac_sonic_string,
+		.owner	= THIS_MODULE,
 	},
 };
 

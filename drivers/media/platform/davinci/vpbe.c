@@ -227,7 +227,7 @@ static int vpbe_set_output(struct vpbe_device *vpbe_dev, int index)
 			vpbe_current_encoder_info(vpbe_dev);
 	struct vpbe_config *cfg = vpbe_dev->cfg;
 	struct venc_platform_data *venc_device = vpbe_dev->venc_device;
-	u32 if_params;
+	enum v4l2_mbus_pixelcode if_params;
 	int enc_out_index;
 	int sd_index;
 	int ret = 0;
@@ -341,10 +341,10 @@ static int vpbe_s_dv_timings(struct vpbe_device *vpbe_dev,
 
 	if (!(cfg->outputs[out_index].output.capabilities &
 	    V4L2_OUT_CAP_DV_TIMINGS))
-		return -ENODATA;
+		return -EINVAL;
 
 	for (i = 0; i < output->num_modes; i++) {
-		if (output->modes[i].timings_type == VPBE_ENC_DV_TIMINGS &&
+		if (output->modes[i].timings_type == VPBE_ENC_CUSTOM_TIMINGS &&
 		    !memcmp(&output->modes[i].dv_timings,
 				dv_timings, sizeof(*dv_timings)))
 			break;
@@ -384,15 +384,8 @@ static int vpbe_s_dv_timings(struct vpbe_device *vpbe_dev,
 static int vpbe_g_dv_timings(struct vpbe_device *vpbe_dev,
 		     struct v4l2_dv_timings *dv_timings)
 {
-	struct vpbe_config *cfg = vpbe_dev->cfg;
-	int out_index = vpbe_dev->current_out_index;
-
-	if (!(cfg->outputs[out_index].output.capabilities &
-		V4L2_OUT_CAP_DV_TIMINGS))
-		return -ENODATA;
-
 	if (vpbe_dev->current_timings.timings_type &
-	  VPBE_ENC_DV_TIMINGS) {
+	  VPBE_ENC_CUSTOM_TIMINGS) {
 		*dv_timings = vpbe_dev->current_timings.dv_timings;
 		return 0;
 	}
@@ -416,10 +409,10 @@ static int vpbe_enum_dv_timings(struct vpbe_device *vpbe_dev,
 	int i;
 
 	if (!(output->output.capabilities & V4L2_OUT_CAP_DV_TIMINGS))
-		return -ENODATA;
+		return -EINVAL;
 
 	for (i = 0; i < output->num_modes; i++) {
-		if (output->modes[i].timings_type == VPBE_ENC_DV_TIMINGS) {
+		if (output->modes[i].timings_type == VPBE_ENC_CUSTOM_TIMINGS) {
 			if (j == timings->index)
 				break;
 			j++;
@@ -438,7 +431,7 @@ static int vpbe_enum_dv_timings(struct vpbe_device *vpbe_dev,
  * Sets the standard if supported by the current encoder. Return the status.
  * 0 - success & -EINVAL on error
  */
-static int vpbe_s_std(struct vpbe_device *vpbe_dev, v4l2_std_id std_id)
+static int vpbe_s_std(struct vpbe_device *vpbe_dev, v4l2_std_id *std_id)
 {
 	struct vpbe_config *cfg = vpbe_dev->cfg;
 	int out_index = vpbe_dev->current_out_index;
@@ -447,16 +440,16 @@ static int vpbe_s_std(struct vpbe_device *vpbe_dev, v4l2_std_id std_id)
 
 	if (!(cfg->outputs[out_index].output.capabilities &
 		V4L2_OUT_CAP_STD))
-		return -ENODATA;
+		return -EINVAL;
 
-	ret = vpbe_get_std_info(vpbe_dev, std_id);
+	ret = vpbe_get_std_info(vpbe_dev, *std_id);
 	if (ret)
 		return ret;
 
 	mutex_lock(&vpbe_dev->lock);
 
 	ret = v4l2_subdev_call(vpbe_dev->encoders[sd_index], video,
-			       s_std_output, std_id);
+			       s_std_output, *std_id);
 	/* set the lcd controller output for the given mode */
 	if (!ret) {
 		struct osd_state *osd_device = vpbe_dev->osd_device;
@@ -480,11 +473,6 @@ static int vpbe_s_std(struct vpbe_device *vpbe_dev, v4l2_std_id std_id)
 static int vpbe_g_std(struct vpbe_device *vpbe_dev, v4l2_std_id *std_id)
 {
 	struct vpbe_enc_mode_info *cur_timings = &vpbe_dev->current_timings;
-	struct vpbe_config *cfg = vpbe_dev->cfg;
-	int out_index = vpbe_dev->current_out_index;
-
-	if (!(cfg->outputs[out_index].output.capabilities & V4L2_OUT_CAP_STD))
-		return -ENODATA;
 
 	if (cur_timings->timings_type & VPBE_ENC_STD) {
 		*std_id = cur_timings->std_id;
@@ -525,9 +513,9 @@ static int vpbe_set_mode(struct vpbe_device *vpbe_dev,
 			 */
 			if (preset_mode->timings_type & VPBE_ENC_STD)
 				return vpbe_s_std(vpbe_dev,
-						 preset_mode->std_id);
+						 &preset_mode->std_id);
 			if (preset_mode->timings_type &
-						VPBE_ENC_DV_TIMINGS) {
+						VPBE_ENC_CUSTOM_TIMINGS) {
 				dv_timings =
 					preset_mode->dv_timings;
 				return vpbe_s_dv_timings(vpbe_dev, &dv_timings);
@@ -570,9 +558,9 @@ static int platform_device_get(struct device *dev, void *data)
 	struct platform_device *pdev = to_platform_device(dev);
 	struct vpbe_device *vpbe_dev = data;
 
-	if (strstr(pdev->name, "vpbe-osd") != NULL)
+	if (strcmp("vpbe-osd", pdev->name) == 0)
 		vpbe_dev->osd_device = platform_get_drvdata(pdev);
-	if (strstr(pdev->name, "vpbe-venc") != NULL)
+	if (strcmp("vpbe-venc", pdev->name) == 0)
 		vpbe_dev->venc_device = dev_get_platdata(&pdev->dev);
 
 	return 0;
@@ -596,6 +584,7 @@ static int vpbe_initialize(struct device *dev, struct vpbe_device *vpbe_dev)
 	struct v4l2_subdev **enc_subdev;
 	struct osd_state *osd_device;
 	struct i2c_adapter *i2c_adap;
+	int output_index;
 	int num_encoders;
 	int ret = 0;
 	int err;
@@ -625,7 +614,6 @@ static int vpbe_initialize(struct device *dev, struct vpbe_device *vpbe_dev)
 		}
 		if (clk_prepare_enable(vpbe_dev->dac_clk)) {
 			ret =  -ENODEV;
-			clk_put(vpbe_dev->dac_clk);
 			goto fail_mutex_unlock;
 		}
 	}
@@ -644,10 +632,8 @@ static int vpbe_initialize(struct device *dev, struct vpbe_device *vpbe_dev)
 
 	err = bus_for_each_dev(&platform_bus_type, NULL, vpbe_dev,
 			       platform_device_get);
-	if (err < 0) {
-		ret = err;
-		goto fail_dev_unregister;
-	}
+	if (err < 0)
+		return err;
 
 	vpbe_dev->venc = venc_sub_dev_init(&vpbe_dev->v4l2_dev,
 					   vpbe_dev->cfg->venc.module_name);
@@ -745,6 +731,7 @@ static int vpbe_initialize(struct device *dev, struct vpbe_device *vpbe_dev)
 	/* set the current encoder and output to that of venc by default */
 	vpbe_dev->current_sd_index = 0;
 	vpbe_dev->current_out_index = 0;
+	output_index = 0;
 
 	mutex_unlock(&vpbe_dev->lock);
 
@@ -876,6 +863,7 @@ static int vpbe_remove(struct platform_device *device)
 static struct platform_driver vpbe_driver = {
 	.driver	= {
 		.name	= "vpbe_controller",
+		.owner	= THIS_MODULE,
 	},
 	.probe = vpbe_probe,
 	.remove = vpbe_remove,

@@ -2,7 +2,7 @@
  * ST Microelectronics SPEAr Pulse Width Modulator driver
  *
  * Copyright (C) 2012 ST Microelectronics
- * Shiraz Hashim <shiraz.linux.kernel@gmail.com>
+ * Shiraz Hashim <shiraz.hashim@st.com>
  *
  * This file is licensed under the terms of the GNU General Public
  * License version 2. This program is licensed "as is" without any
@@ -49,11 +49,13 @@
  * @mmio_base: base address of pwm chip
  * @clk: pointer to clk structure of pwm chip
  * @chip: linux pwm chip representation
+ * @dev: pointer to device structure of pwm chip
  */
 struct spear_pwm_chip {
 	void __iomem *mmio_base;
 	struct clk *clk;
 	struct pwm_chip chip;
+	struct device *dev;
 };
 
 static inline struct spear_pwm_chip *to_spear_pwm_chip(struct pwm_chip *chip)
@@ -178,19 +180,27 @@ static int spear_pwm_probe(struct platform_device *pdev)
 	int ret;
 	u32 val;
 
-	pc = devm_kzalloc(&pdev->dev, sizeof(*pc), GFP_KERNEL);
-	if (!pc)
-		return -ENOMEM;
-
 	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	pc->mmio_base = devm_ioremap_resource(&pdev->dev, r);
-	if (IS_ERR(pc->mmio_base))
-		return PTR_ERR(pc->mmio_base);
+	if (!r) {
+		dev_err(&pdev->dev, "no memory resources defined\n");
+		return -ENODEV;
+	}
+
+	pc = devm_kzalloc(&pdev->dev, sizeof(*pc), GFP_KERNEL);
+	if (!pc) {
+		dev_err(&pdev->dev, "failed to allocate memory\n");
+		return -ENOMEM;
+	}
+
+	pc->mmio_base = devm_request_and_ioremap(&pdev->dev, r);
+	if (!pc->mmio_base)
+		return -EADDRNOTAVAIL;
 
 	pc->clk = devm_clk_get(&pdev->dev, NULL);
 	if (IS_ERR(pc->clk))
 		return PTR_ERR(pc->clk);
 
+	pc->dev = &pdev->dev;
 	platform_set_drvdata(pdev, pc);
 
 	pc->chip.dev = &pdev->dev;
@@ -220,7 +230,7 @@ static int spear_pwm_probe(struct platform_device *pdev)
 	}
 
 	ret = pwmchip_add(&pc->chip);
-	if (ret < 0) {
+	if (!ret) {
 		clk_unprepare(pc->clk);
 		dev_err(&pdev->dev, "pwmchip_add() failed: %d\n", ret);
 	}
@@ -241,7 +251,7 @@ static int spear_pwm_remove(struct platform_device *pdev)
 	return pwmchip_remove(&pc->chip);
 }
 
-static const struct of_device_id spear_pwm_of_match[] = {
+static struct of_device_id spear_pwm_of_match[] = {
 	{ .compatible = "st,spear320-pwm" },
 	{ .compatible = "st,spear1340-pwm" },
 	{ }
@@ -261,6 +271,6 @@ static struct platform_driver spear_pwm_driver = {
 module_platform_driver(spear_pwm_driver);
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Shiraz Hashim <shiraz.linux.kernel@gmail.com>");
+MODULE_AUTHOR("Shiraz Hashim <shiraz.hashim@st.com>");
 MODULE_AUTHOR("Viresh Kumar <viresh.kumar@linaro.com>");
 MODULE_ALIAS("platform:spear-pwm");

@@ -13,7 +13,6 @@
 #include <linux/platform_device.h>
 #include <linux/hw_random.h>
 #include <linux/delay.h>
-#include <linux/of_address.h>
 #include <linux/of_platform.h>
 #include <asm/io.h>
 
@@ -123,7 +122,7 @@ static int ppc4xx_rng_remove(struct platform_device *dev)
 	return 0;
 }
 
-static const struct of_device_id ppc4xx_rng_match[] = {
+static struct of_device_id ppc4xx_rng_match[] = {
 	{ .compatible = "ppc4xx-rng", },
 	{ .compatible = "amcc,ppc460ex-rng", },
 	{ .compatible = "amcc,ppc440epx-rng", },
@@ -133,6 +132,7 @@ static const struct of_device_id ppc4xx_rng_match[] = {
 static struct platform_driver ppc4xx_rng_driver = {
 	.driver = {
 		.name = MODULE_NAME,
+		.owner = THIS_MODULE,
 		.of_match_table = ppc4xx_rng_match,
 	},
 	.probe = ppc4xx_rng_probe,

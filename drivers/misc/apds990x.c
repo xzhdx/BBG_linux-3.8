@@ -609,7 +609,7 @@ static int apds990x_detect(struct apds990x_chip *chip)
 	return ret;
 }
 
-#ifdef CONFIG_PM
+#if defined(CONFIG_PM) || defined(CONFIG_PM_RUNTIME)
 static int apds990x_chip_on(struct apds990x_chip *chip)
 {
 	int err	 = regulator_bulk_enable(ARRAY_SIZE(chip->regs),
@@ -696,11 +696,12 @@ static ssize_t apds990x_lux_calib_store(struct device *dev,
 {
 	struct apds990x_chip *chip = dev_get_drvdata(dev);
 	unsigned long value;
-	int ret;
 
-	ret = kstrtoul(buf, 0, &value);
-	if (ret)
-		return ret;
+	if (strict_strtoul(buf, 0, &value))
+		return -EINVAL;
+
+	if (chip->lux_calib > APDS_RANGE)
+		return -EINVAL;
 
 	chip->lux_calib = value;
 
@@ -761,9 +762,8 @@ static ssize_t apds990x_rate_store(struct device *dev,
 	unsigned long value;
 	int ret;
 
-	ret = kstrtoul(buf, 0, &value);
-	if (ret)
-		return ret;
+	if (strict_strtoul(buf, 0, &value))
+		return -EINVAL;
 
 	mutex_lock(&chip->mutex);
 	ret = apds990x_set_arate(chip, value);
@@ -816,11 +816,9 @@ static ssize_t apds990x_prox_enable_store(struct device *dev,
 {
 	struct apds990x_chip *chip =  dev_get_drvdata(dev);
 	unsigned long value;
-	int ret;
 
-	ret = kstrtoul(buf, 0, &value);
-	if (ret)
-		return ret;
+	if (strict_strtoul(buf, 0, &value))
+		return -EINVAL;
 
 	mutex_lock(&chip->mutex);
 
@@ -897,12 +895,11 @@ static ssize_t apds990x_lux_thresh_below_show(struct device *dev,
 static ssize_t apds990x_set_lux_thresh(struct apds990x_chip *chip, u32 *target,
 				const char *buf)
 {
+	int ret = 0;
 	unsigned long thresh;
-	int ret;
 
-	ret = kstrtoul(buf, 0, &thresh);
-	if (ret)
-		return ret;
+	if (strict_strtoul(buf, 0, &thresh))
+		return -EINVAL;
 
 	if (thresh > APDS_RANGE)
 		return -EINVAL;
@@ -963,11 +960,9 @@ static ssize_t apds990x_prox_threshold_store(struct device *dev,
 {
 	struct apds990x_chip *chip =  dev_get_drvdata(dev);
 	unsigned long value;
-	int ret;
 
-	ret = kstrtoul(buf, 0, &value);
-	if (ret)
-		return ret;
+	if (strict_strtoul(buf, 0, &value))
+		return -EINVAL;
 
 	if ((value > APDS_RANGE) || (value == 0) ||
 		(value < APDS_PROX_HYSTERESIS))
@@ -998,12 +993,9 @@ static ssize_t apds990x_power_state_store(struct device *dev,
 {
 	struct apds990x_chip *chip =  dev_get_drvdata(dev);
 	unsigned long value;
-	int ret;
 
-	ret = kstrtoul(buf, 0, &value);
-	if (ret)
-		return ret;
-
+	if (strict_strtoul(buf, 0, &value))
+		return -EINVAL;
 	if (value) {
 		pm_runtime_get_sync(dev);
 		mutex_lock(&chip->mutex);
@@ -1212,7 +1204,7 @@ static int apds990x_remove(struct i2c_client *client)
 	return 0;
 }
 
-#ifdef CONFIG_PM_SLEEP
+#ifdef CONFIG_PM
 static int apds990x_suspend(struct device *dev)
 {
 	struct i2c_client *client = container_of(dev, struct i2c_client, dev);
@@ -1235,9 +1227,13 @@ static int apds990x_resume(struct device *dev)
 
 	return 0;
 }
+#else
+#define apds990x_suspend  NULL
+#define apds990x_resume	  NULL
+#define apds990x_shutdown NULL
 #endif
 
-#ifdef CONFIG_PM
+#ifdef CONFIG_PM_RUNTIME
 static int apds990x_runtime_suspend(struct device *dev)
 {
 	struct i2c_client *client = container_of(dev, struct i2c_client, dev);

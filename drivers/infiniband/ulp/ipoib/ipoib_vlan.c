@@ -58,7 +58,6 @@ int __ipoib_vlan_add(struct ipoib_dev_priv *ppriv, struct ipoib_dev_priv *priv,
 	/* MTU will be reset when mcast join happens */
 	priv->dev->mtu   = IPOIB_UD_MTU(priv->max_ib_mtu);
 	priv->mcast_mtu  = priv->admin_mtu = priv->dev->mtu;
-	priv->parent = ppriv->dev;
 	set_bit(IPOIB_FLAG_SUBINTERFACE, &priv->flags);
 
 	result = ipoib_set_dev_features(priv, ppriv->ca);
@@ -85,6 +84,8 @@ int __ipoib_vlan_add(struct ipoib_dev_priv *ppriv, struct ipoib_dev_priv *priv,
 		goto register_failed;
 	}
 
+	priv->parent = ppriv->dev;
+
 	ipoib_create_debug_files(priv->dev);
 
 	/* RTNL childs don't need proprietary sysfs entries */
@@ -101,6 +102,7 @@ int __ipoib_vlan_add(struct ipoib_dev_priv *ppriv, struct ipoib_dev_priv *priv,
 	}
 
 	priv->child_type  = type;
+	priv->dev->iflink = ppriv->dev->ifindex;
 	list_add_tail(&priv->list, &ppriv->child_intfs);
 
 	return 0;
@@ -138,7 +140,7 @@ int ipoib_vlan_add(struct net_device *pdev, unsigned short pkey)
 	if (!rtnl_trylock())
 		return restart_syscall();
 
-	down_write(&ppriv->vlan_rwsem);
+	mutex_lock(&ppriv->vlan_mutex);
 
 	/*
 	 * First ensure this isn't a duplicate. We check the parent device and
@@ -161,7 +163,7 @@ int ipoib_vlan_add(struct net_device *pdev, unsigned short pkey)
 	result = __ipoib_vlan_add(ppriv, priv, pkey, IPOIB_LEGACY_CHILD);
 
 out:
-	up_write(&ppriv->vlan_rwsem);
+	mutex_unlock(&ppriv->vlan_mutex);
 
 	if (result)
 		free_netdev(priv->dev);
@@ -183,8 +185,7 @@ int ipoib_vlan_delete(struct net_device *pdev, unsigned short pkey)
 
 	if (!rtnl_trylock())
 		return restart_syscall();
-
-	down_write(&ppriv->vlan_rwsem);
+	mutex_lock(&ppriv->vlan_mutex);
 	list_for_each_entry_safe(priv, tpriv, &ppriv->child_intfs, list) {
 		if (priv->pkey == pkey &&
 		    priv->child_type == IPOIB_LEGACY_CHILD) {
@@ -194,8 +195,7 @@ int ipoib_vlan_delete(struct net_device *pdev, unsigned short pkey)
 			break;
 		}
 	}
-	up_write(&ppriv->vlan_rwsem);
-
+	mutex_unlock(&ppriv->vlan_mutex);
 	rtnl_unlock();
 
 	if (dev) {

@@ -2,7 +2,6 @@
 #define _ASM_SPARC64_HUGETLB_H
 
 #include <asm/page.h>
-#include <asm-generic/hugetlb.h>
 
 
 void set_huge_pte_at(struct mm_struct *mm, unsigned long addr,

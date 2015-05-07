@@ -104,26 +104,6 @@ static unsigned long bgpio_read64(void __iomem *reg)
 }
 #endif /* BITS_PER_LONG >= 64 */
 
-static void bgpio_write16be(void __iomem *reg, unsigned long data)
-{
-	iowrite16be(data, reg);
-}
-
-static unsigned long bgpio_read16be(void __iomem *reg)
-{
-	return ioread16be(reg);
-}
-
-static void bgpio_write32be(void __iomem *reg, unsigned long data)
-{
-	iowrite32be(data, reg);
-}
-
-static unsigned long bgpio_read32be(void __iomem *reg)
-{
-	return ioread32be(reg);
-}
-
 static unsigned long bgpio_pin2mask(struct bgpio_chip *bgc, unsigned int pin)
 {
 	return 1 << pin;
@@ -139,7 +119,7 @@ static int bgpio_get(struct gpio_chip *gc, unsigned int gpio)
 {
 	struct bgpio_chip *bgc = to_bgpio_chip(gc);
 
-	return !!(bgc->read_reg(bgc->reg_dat) & bgc->pin2mask(bgc, gpio));
+	return bgc->read_reg(bgc->reg_dat) & bgc->pin2mask(bgc, gpio);
 }
 
 static void bgpio_set(struct gpio_chip *gc, unsigned int gpio, int val)
@@ -188,79 +168,6 @@ static void bgpio_set_set(struct gpio_chip *gc, unsigned int gpio, int val)
 	bgc->write_reg(bgc->reg_set, bgc->data);
 
 	spin_unlock_irqrestore(&bgc->lock, flags);
-}
-
-static void bgpio_multiple_get_masks(struct bgpio_chip *bgc,
-				     unsigned long *mask, unsigned long *bits,
-				     unsigned long *set_mask,
-				     unsigned long *clear_mask)
-{
-	int i;
-
-	*set_mask = 0;
-	*clear_mask = 0;
-
-	for (i = 0; i < bgc->bits; i++) {
-		if (*mask == 0)
-			break;
-		if (__test_and_clear_bit(i, mask)) {
-			if (test_bit(i, bits))
-				*set_mask |= bgc->pin2mask(bgc, i);
-			else
-				*clear_mask |= bgc->pin2mask(bgc, i);
-		}
-	}
-}
-
-static void bgpio_set_multiple_single_reg(struct bgpio_chip *bgc,
-					  unsigned long *mask,
-					  unsigned long *bits,
-					  void __iomem *reg)
-{
-	unsigned long flags;
-	unsigned long set_mask, clear_mask;
-
-	spin_lock_irqsave(&bgc->lock, flags);
-
-	bgpio_multiple_get_masks(bgc, mask, bits, &set_mask, &clear_mask);
-
-	bgc->data |= set_mask;
-	bgc->data &= ~clear_mask;
-
-	bgc->write_reg(reg, bgc->data);
-
-	spin_unlock_irqrestore(&bgc->lock, flags);
-}
-
-static void bgpio_set_multiple(struct gpio_chip *gc, unsigned long *mask,
-			       unsigned long *bits)
-{
-	struct bgpio_chip *bgc = to_bgpio_chip(gc);
-
-	bgpio_set_multiple_single_reg(bgc, mask, bits, bgc->reg_dat);
-}
-
-static void bgpio_set_multiple_set(struct gpio_chip *gc, unsigned long *mask,
-				   unsigned long *bits)
-{
-	struct bgpio_chip *bgc = to_bgpio_chip(gc);
-
-	bgpio_set_multiple_single_reg(bgc, mask, bits, bgc->reg_set);
-}
-
-static void bgpio_set_multiple_with_clear(struct gpio_chip *gc,
-					  unsigned long *mask,
-					  unsigned long *bits)
-{
-	struct bgpio_chip *bgc = to_bgpio_chip(gc);
-	unsigned long set_mask, clear_mask;
-
-	bgpio_multiple_get_masks(bgc, mask, bits, &set_mask, &clear_mask);
-
-	if (set_mask)
-		bgc->write_reg(bgc->reg_set, set_mask);
-	if (clear_mask)
-		bgc->write_reg(bgc->reg_clr, clear_mask);
 }
 
 static int bgpio_simple_dir_in(struct gpio_chip *gc, unsigned int gpio)
@@ -342,8 +249,7 @@ static int bgpio_dir_out_inv(struct gpio_chip *gc, unsigned int gpio, int val)
 
 static int bgpio_setup_accessors(struct device *dev,
 				 struct bgpio_chip *bgc,
-				 bool bit_be,
-				 bool byte_be)
+				 bool be)
 {
 
 	switch (bgc->bits) {
@@ -352,33 +258,17 @@ static int bgpio_setup_accessors(struct device *dev,
 		bgc->write_reg	= bgpio_write8;
 		break;
 	case 16:
-		if (byte_be) {
-			bgc->read_reg	= bgpio_read16be;
-			bgc->write_reg	= bgpio_write16be;
-		} else {
-			bgc->read_reg	= bgpio_read16;
-			bgc->write_reg	= bgpio_write16;
-		}
+		bgc->read_reg	= bgpio_read16;
+		bgc->write_reg	= bgpio_write16;
 		break;
 	case 32:
-		if (byte_be) {
-			bgc->read_reg	= bgpio_read32be;
-			bgc->write_reg	= bgpio_write32be;
-		} else {
-			bgc->read_reg	= bgpio_read32;
-			bgc->write_reg	= bgpio_write32;
-		}
+		bgc->read_reg	= bgpio_read32;
+		bgc->write_reg	= bgpio_write32;
 		break;
 #if BITS_PER_LONG >= 64
 	case 64:
-		if (byte_be) {
-			dev_err(dev,
-				"64 bit big endian byte order unsupported\n");
-			return -EINVAL;
-		} else {
-			bgc->read_reg	= bgpio_read64;
-			bgc->write_reg	= bgpio_write64;
-		}
+		bgc->read_reg	= bgpio_read64;
+		bgc->write_reg	= bgpio_write64;
 		break;
 #endif /* BITS_PER_LONG >= 64 */
 	default:
@@ -386,7 +276,7 @@ static int bgpio_setup_accessors(struct device *dev,
 		return -EINVAL;
 	}
 
-	bgc->pin2mask = bit_be ? bgpio_pin2mask_be : bgpio_pin2mask;
+	bgc->pin2mask = be ? bgpio_pin2mask_be : bgpio_pin2mask;
 
 	return 0;
 }
@@ -427,14 +317,11 @@ static int bgpio_setup_io(struct bgpio_chip *bgc,
 		bgc->reg_set = set;
 		bgc->reg_clr = clr;
 		bgc->gc.set = bgpio_set_with_clear;
-		bgc->gc.set_multiple = bgpio_set_multiple_with_clear;
 	} else if (set && !clr) {
 		bgc->reg_set = set;
 		bgc->gc.set = bgpio_set_set;
-		bgc->gc.set_multiple = bgpio_set_multiple_set;
 	} else {
 		bgc->gc.set = bgpio_set;
-		bgc->gc.set_multiple = bgpio_set_multiple;
 	}
 
 	bgc->gc.get = bgpio_get;
@@ -464,18 +351,13 @@ static int bgpio_setup_direction(struct bgpio_chip *bgc,
 	return 0;
 }
 
-static int bgpio_request(struct gpio_chip *chip, unsigned gpio_pin)
-{
-	if (gpio_pin < chip->ngpio)
-		return 0;
-
-	return -EINVAL;
-}
-
 int bgpio_remove(struct bgpio_chip *bgc)
 {
-	gpiochip_remove(&bgc->gc);
-	return 0;
+	int err = gpiochip_remove(&bgc->gc);
+
+	kfree(bgc);
+
+	return err;
 }
 EXPORT_SYMBOL_GPL(bgpio_remove);
 
@@ -498,14 +380,12 @@ int bgpio_init(struct bgpio_chip *bgc, struct device *dev,
 	bgc->gc.label = dev_name(dev);
 	bgc->gc.base = -1;
 	bgc->gc.ngpio = bgc->bits;
-	bgc->gc.request = bgpio_request;
 
 	ret = bgpio_setup_io(bgc, dat, set, clr);
 	if (ret)
 		return ret;
 
-	ret = bgpio_setup_accessors(dev, bgc, flags & BGPIOF_BIG_ENDIAN,
-				    flags & BGPIOF_BIG_ENDIAN_BYTE_ORDER);
+	ret = bgpio_setup_accessors(dev, bgc, flags & BGPIOF_BIG_ENDIAN);
 	if (ret)
 		return ret;
 
@@ -574,7 +454,7 @@ static int bgpio_pdev_probe(struct platform_device *pdev)
 	void __iomem *dirout;
 	void __iomem *dirin;
 	unsigned long sz;
-	unsigned long flags = pdev->id_entry->driver_data;
+	unsigned long flags = 0;
 	int err;
 	struct bgpio_chip *bgc;
 	struct bgpio_pdata *pdata = dev_get_platdata(dev);
@@ -605,6 +485,9 @@ static int bgpio_pdev_probe(struct platform_device *pdev)
 	if (err)
 		return err;
 
+	if (!strcmp(platform_get_device_id(pdev)->name, "basic-mmio-gpio-be"))
+		flags |= BGPIOF_BIG_ENDIAN;
+
 	bgc = devm_kzalloc(&pdev->dev, sizeof(*bgc), GFP_KERNEL);
 	if (!bgc)
 		return -ENOMEM;
@@ -614,8 +497,6 @@ static int bgpio_pdev_probe(struct platform_device *pdev)
 		return err;
 
 	if (pdata) {
-		if (pdata->label)
-			bgc->gc.label = pdata->label;
 		bgc->gc.base = pdata->base;
 		if (pdata->ngpio > 0)
 			bgc->gc.ngpio = pdata->ngpio;
@@ -634,14 +515,9 @@ static int bgpio_pdev_remove(struct platform_device *pdev)
 }
 
 static const struct platform_device_id bgpio_id_table[] = {
-	{
-		.name		= "basic-mmio-gpio",
-		.driver_data	= 0,
-	}, {
-		.name		= "basic-mmio-gpio-be",
-		.driver_data	= BGPIOF_BIG_ENDIAN,
-	},
-	{ }
+	{ "basic-mmio-gpio", },
+	{ "basic-mmio-gpio-be", },
+	{},
 };
 MODULE_DEVICE_TABLE(platform, bgpio_id_table);
 

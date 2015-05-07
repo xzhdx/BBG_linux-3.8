@@ -13,6 +13,7 @@
  * option) any later version.
  */
 #include <linux/kernel.h>
+#include <linux/init.h>
 #include <linux/errno.h>
 #include <linux/slab.h>
 #include <linux/stddef.h>
@@ -42,6 +43,11 @@ u32 ucc_slow_get_qe_cr_subblock(int uccs_num)
 	}
 }
 EXPORT_SYMBOL(ucc_slow_get_qe_cr_subblock);
+
+void ucc_slow_poll_transmitter_now(struct ucc_slow_private * uccs)
+{
+	out_be16(&uccs->us_regs->utodr, UCC_SLOW_TOD);
+}
 
 void ucc_slow_graceful_stop_tx(struct ucc_slow_private * uccs)
 {

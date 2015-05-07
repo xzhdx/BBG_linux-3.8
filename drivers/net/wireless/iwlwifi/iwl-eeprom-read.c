@@ -5,7 +5,7 @@
  *
  * GPL LICENSE SUMMARY
  *
- * Copyright(c) 2008 - 2014 Intel Corporation. All rights reserved.
+ * Copyright(c) 2008 - 2012 Intel Corporation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -22,7 +22,7 @@
  * USA
  *
  * The full GNU General Public License is included in this distribution
- * in the file called COPYING.
+ * in the file called LICENSE.GPL.
  *
  * Contact Information:
  *  Intel Linux Wireless <ilw@linux.intel.com>
@@ -30,7 +30,7 @@
  *
  * BSD LICENSE
  *
- * Copyright(c) 2005 - 2014 Intel Corporation. All rights reserved.
+ * Copyright(c) 2005 - 2012 Intel Corporation. All rights reserved.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -63,7 +63,6 @@
 #include <linux/slab.h>
 #include <linux/export.h>
 
-#include "iwl-drv.h"
 #include "iwl-debug.h"
 #include "iwl-eeprom-read.h"
 #include "iwl-io.h"
@@ -248,7 +247,7 @@ static int iwl_read_otp_word(struct iwl_trans *trans, u16 addr,
 	otpgp = iwl_read32(trans, CSR_OTP_GP_REG);
 	if (otpgp & CSR_OTP_GP_REG_ECC_UNCORR_STATUS_MSK) {
 		/* stop in this case */
-		/* set the uncorrectable OTP ECC bit for acknowledgment */
+		/* set the uncorrectable OTP ECC bit for acknowledgement */
 		iwl_set_bit(trans, CSR_OTP_GP_REG,
 			    CSR_OTP_GP_REG_ECC_UNCORR_STATUS_MSK);
 		IWL_ERR(trans, "Uncorrectable OTP ECC error, abort OTP read\n");
@@ -256,7 +255,7 @@ static int iwl_read_otp_word(struct iwl_trans *trans, u16 addr,
 	}
 	if (otpgp & CSR_OTP_GP_REG_ECC_CORR_STATUS_MSK) {
 		/* continue in this case */
-		/* set the correctable OTP ECC bit for acknowledgment */
+		/* set the correctable OTP ECC bit for acknowledgement */
 		iwl_set_bit(trans, CSR_OTP_GP_REG,
 			    CSR_OTP_GP_REG_ECC_CORR_STATUS_MSK);
 		IWL_ERR(trans, "Correctable OTP ECC error, continue read\n");
@@ -461,4 +460,4 @@ int iwl_read_eeprom(struct iwl_trans *trans, u8 **eeprom, size_t *eeprom_size)
 
 	return ret;
 }
-IWL_EXPORT_SYMBOL(iwl_read_eeprom);
+EXPORT_SYMBOL_GPL(iwl_read_eeprom);

@@ -10,12 +10,6 @@
 extern const char xen_hypervisor_callback[];
 extern const char xen_failsafe_callback[];
 
-void xen_sysenter_target(void);
-#ifdef CONFIG_X86_64
-void xen_syscall_target(void);
-void xen_syscall32_target(void);
-#endif
-
 extern void *xen_initial_gdt;
 
 struct trap_info;
@@ -35,15 +29,11 @@ void xen_build_mfn_list_list(void);
 void xen_setup_machphys_mapping(void);
 void xen_setup_kernel_pagetable(pgd_t *pgd, unsigned long max_pfn);
 void xen_reserve_top(void);
+extern unsigned long xen_max_p2m_pfn;
 
-void xen_mm_pin_all(void);
-void xen_mm_unpin_all(void);
+void xen_set_pat(u64);
 
-unsigned long __ref xen_chk_extra_mem(unsigned long pfn);
-void __init xen_inv_extra_mem(void);
-void __init xen_remap_memory(void);
 char * __init xen_memory_setup(void);
-char * xen_auto_xlated_memory_setup(void);
 void __init xen_arch_setup(void);
 void xen_enable_sysenter(void);
 void xen_enable_syscall(void);
@@ -54,7 +44,7 @@ void xen_hvm_init_shared_info(void);
 void xen_unplug_emulated_devices(void);
 
 void __init xen_build_dynamic_phys_to_machine(void);
-void __init xen_vmalloc_p2m_tree(void);
+unsigned long __init xen_revector_p2m_tree(void);
 
 void xen_init_irq_ops(void);
 void xen_setup_timer(int cpu);
@@ -83,7 +73,7 @@ static inline void xen_hvm_smp_init(void) {}
 
 #ifdef CONFIG_PARAVIRT_SPINLOCKS
 void __init xen_init_spinlocks(void);
-void xen_init_lock_cpu(int cpu);
+void __cpuinit xen_init_lock_cpu(int cpu);
 void xen_uninit_lock_cpu(int cpu);
 #else
 static inline void xen_init_spinlocks(void)
@@ -112,20 +102,12 @@ static inline void __init xen_init_apic(void)
 }
 #endif
 
-#ifdef CONFIG_XEN_EFI
-extern void xen_efi_init(void);
-#else
-static inline void __init xen_efi_init(void)
-{
-}
-#endif
-
 /* Declare an asm function, along with symbols needed to make it
    inlineable */
 #define DECL_ASM(ret, name, ...)		\
-	__visible ret name(__VA_ARGS__);	\
-	extern char name##_end[] __visible;	\
-	extern char name##_reloc[] __visible
+	ret name(__VA_ARGS__);			\
+	extern char name##_end[];		\
+	extern char name##_reloc[]		\
 
 DECL_ASM(void, xen_irq_enable_direct, void);
 DECL_ASM(void, xen_irq_disable_direct, void);
@@ -133,13 +115,12 @@ DECL_ASM(unsigned long, xen_save_fl_direct, void);
 DECL_ASM(void, xen_restore_fl_direct, unsigned long);
 
 /* These are not functions, and cannot be called normally */
-__visible void xen_iret(void);
-__visible void xen_sysexit(void);
-__visible void xen_sysret32(void);
-__visible void xen_sysret64(void);
-__visible void xen_adjust_exception_frame(void);
+void xen_iret(void);
+void xen_sysexit(void);
+void xen_sysret32(void);
+void xen_sysret64(void);
+void xen_adjust_exception_frame(void);
 
 extern int xen_panic_handler_init(void);
 
-void xen_pvh_secondary_vcpu_init(int cpu);
 #endif /* XEN_OPS_H */

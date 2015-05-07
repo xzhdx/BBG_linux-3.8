@@ -21,30 +21,20 @@
 
 #include "cxd2820r_priv.h"
 
-/* Max transfer size done by I2C transfer functions */
-#define MAX_XFER_SIZE  64
-
 /* write multiple registers */
 static int cxd2820r_wr_regs_i2c(struct cxd2820r_priv *priv, u8 i2c, u8 reg,
 	u8 *val, int len)
 {
 	int ret;
-	u8 buf[MAX_XFER_SIZE];
+	u8 buf[len+1];
 	struct i2c_msg msg[1] = {
 		{
 			.addr = i2c,
 			.flags = 0,
-			.len = len + 1,
+			.len = sizeof(buf),
 			.buf = buf,
 		}
 	};
-
-	if (1 + len > sizeof(buf)) {
-		dev_warn(&priv->i2c->dev,
-			 "%s: i2c wr reg=%04x: len=%d is too big!\n",
-			 KBUILD_MODNAME, reg, len);
-		return -EINVAL;
-	}
 
 	buf[0] = reg;
 	memcpy(&buf[1], val, len);
@@ -65,7 +55,7 @@ static int cxd2820r_rd_regs_i2c(struct cxd2820r_priv *priv, u8 i2c, u8 reg,
 	u8 *val, int len)
 {
 	int ret;
-	u8 buf[MAX_XFER_SIZE];
+	u8 buf[len];
 	struct i2c_msg msg[2] = {
 		{
 			.addr = i2c,
@@ -75,17 +65,10 @@ static int cxd2820r_rd_regs_i2c(struct cxd2820r_priv *priv, u8 i2c, u8 reg,
 		}, {
 			.addr = i2c,
 			.flags = I2C_M_RD,
-			.len = len,
+			.len = sizeof(buf),
 			.buf = buf,
 		}
 	};
-
-	if (len > sizeof(buf)) {
-		dev_warn(&priv->i2c->dev,
-			 "%s: i2c wr reg=%04x: len=%d is too big!\n",
-			 KBUILD_MODNAME, reg, len);
-		return -EINVAL;
-	}
 
 	ret = i2c_transfer(priv->i2c, msg, 2);
 	if (ret == 2) {
@@ -242,6 +225,12 @@ int cxd2820r_gpio(struct dvb_frontend *fe, u8 *gpio)
 error:
 	dev_dbg(&priv->i2c->dev, "%s: failed=%d\n", __func__, ret);
 	return ret;
+}
+
+/* 64 bit div with round closest, like DIV_ROUND_CLOSEST but 64 bit */
+u32 cxd2820r_div_u64_round_closest(u64 dividend, u32 divisor)
+{
+	return div_u64(dividend + (divisor / 2), divisor);
 }
 
 static int cxd2820r_set_frontend(struct dvb_frontend *fe)
@@ -558,10 +547,10 @@ static enum dvbfe_search cxd2820r_search(struct dvb_frontend *fe)
 
 	/* check if we have a valid signal */
 	if (status & FE_HAS_LOCK) {
-		priv->last_tune_failed = false;
+		priv->last_tune_failed = 0;
 		return DVBFE_ALGO_SEARCH_SUCCESS;
 	} else {
-		priv->last_tune_failed = true;
+		priv->last_tune_failed = 1;
 		return DVBFE_ALGO_SEARCH_AGAIN;
 	}
 
@@ -578,14 +567,18 @@ static int cxd2820r_get_frontend_algo(struct dvb_frontend *fe)
 static void cxd2820r_release(struct dvb_frontend *fe)
 {
 	struct cxd2820r_priv *priv = fe->demodulator_priv;
+	int uninitialized_var(ret); /* silence compiler warning */
 
 	dev_dbg(&priv->i2c->dev, "%s\n", __func__);
 
 #ifdef CONFIG_GPIOLIB
 	/* remove GPIOs */
-	if (priv->gpio_chip.label)
-		gpiochip_remove(&priv->gpio_chip);
-
+	if (priv->gpio_chip.label) {
+		ret = gpiochip_remove(&priv->gpio_chip);
+		if (ret)
+			dev_err(&priv->i2c->dev, "%s: gpiochip_remove() " \
+					"failed=%d\n", KBUILD_MODNAME, ret);
+	}
 #endif
 	kfree(priv);
 	return;
@@ -667,8 +660,7 @@ static const struct dvb_frontend_ops cxd2820r_ops = {
 			FE_CAN_GUARD_INTERVAL_AUTO	|
 			FE_CAN_HIERARCHY_AUTO		|
 			FE_CAN_MUTE_TS			|
-			FE_CAN_2G_MODULATION		|
-			FE_CAN_MULTISTREAM
+			FE_CAN_2G_MODULATION
 		},
 
 	.release		= cxd2820r_release,

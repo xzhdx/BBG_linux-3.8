@@ -1,6 +1,7 @@
 #define PRISM2_PCCARD
 
 #include <linux/module.h>
+#include <linux/init.h>
 #include <linux/if.h>
 #include <linux/slab.h>
 #include <linux/wait.h>
@@ -381,15 +382,18 @@ static void prism2_pccard_genesis_reset(local_info_t *local, int hcr)
 
 	res = pcmcia_read_config_byte(hw_priv->link, CISREG_COR, &old_cor);
 	if (res != 0) {
-		printk(KERN_DEBUG "%s failed 1 (%d)\n", __func__, res);
+		printk(KERN_DEBUG "prism2_pccard_genesis_sreset failed 1 "
+		       "(%d)\n", res);
 		return;
 	}
-	printk(KERN_DEBUG "%s: original COR %02x\n", __func__, old_cor);
+	printk(KERN_DEBUG "prism2_pccard_genesis_sreset: original COR %02x\n",
+		old_cor);
 
 	res = pcmcia_write_config_byte(hw_priv->link, CISREG_COR,
 				old_cor | COR_SOFT_RESET);
 	if (res != 0) {
-		printk(KERN_DEBUG "%s failed 2 (%d)\n", __func__, res);
+		printk(KERN_DEBUG "prism2_pccard_genesis_sreset failed 2 "
+		       "(%d)\n", res);
 		return;
 	}
 
@@ -398,7 +402,8 @@ static void prism2_pccard_genesis_reset(local_info_t *local, int hcr)
 	/* Setup Genesis mode */
 	res = pcmcia_write_config_byte(hw_priv->link, CISREG_CCSR, hcr);
 	if (res != 0) {
-		printk(KERN_DEBUG "%s failed 3 (%d)\n", __func__, res);
+		printk(KERN_DEBUG "prism2_pccard_genesis_sreset failed 3 "
+		       "(%d)\n", res);
 		return;
 	}
 	mdelay(10);
@@ -406,7 +411,8 @@ static void prism2_pccard_genesis_reset(local_info_t *local, int hcr)
 	res = pcmcia_write_config_byte(hw_priv->link, CISREG_COR,
 				old_cor & ~COR_SOFT_RESET);
 	if (res != 0) {
-		printk(KERN_DEBUG "%s failed 4 (%d)\n", __func__, res);
+		printk(KERN_DEBUG "prism2_pccard_genesis_sreset failed 4 "
+		       "(%d)\n", res);
 		return;
 	}
 
@@ -672,8 +678,6 @@ static const struct pcmcia_device_id hostap_cs_ids[] = {
 	PCMCIA_DEVICE_PROD_ID12(
 		"ZoomAir 11Mbps High", "Rate wireless Networking",
 		0x273fe3db, 0x32a1eaee),
-	PCMCIA_DEVICE_PROD_ID12("NETGEAR MA401 Wireless PC", "Card",
-		0xa37434e9, 0x9762e8f1),
 	PCMCIA_DEVICE_PROD_ID123(
 		"Pretec", "CompactWLAN Card 802.11b", "2.5",
 		0x1cadd3e5, 0xe697636c, 0x7a5bfcf1),
@@ -705,4 +709,17 @@ static struct pcmcia_driver hostap_driver = {
 	.suspend	= hostap_cs_suspend,
 	.resume		= hostap_cs_resume,
 };
-module_pcmcia_driver(hostap_driver);
+
+static int __init init_prism2_pccard(void)
+{
+	return pcmcia_register_driver(&hostap_driver);
+}
+
+static void __exit exit_prism2_pccard(void)
+{
+	pcmcia_unregister_driver(&hostap_driver);
+}
+
+
+module_init(init_prism2_pccard);
+module_exit(exit_prism2_pccard);

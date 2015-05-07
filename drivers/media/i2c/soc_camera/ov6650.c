@@ -32,7 +32,7 @@
 #include <linux/module.h>
 
 #include <media/soc_camera.h>
-#include <media/v4l2-clk.h>
+#include <media/v4l2-chip-ident.h>
 #include <media/v4l2-ctrls.h>
 
 /* Register definitions */
@@ -196,24 +196,23 @@ struct ov6650 {
 		struct v4l2_ctrl *blue;
 		struct v4l2_ctrl *red;
 	};
-	struct v4l2_clk		*clk;
 	bool			half_scale;	/* scale down output by 2 */
 	struct v4l2_rect	rect;		/* sensor cropping window */
 	unsigned long		pclk_limit;	/* from host */
 	unsigned long		pclk_max;	/* from resolution and format */
 	struct v4l2_fract	tpf;		/* as requested with s_parm */
-	u32 code;
+	enum v4l2_mbus_pixelcode code;
 	enum v4l2_colorspace	colorspace;
 };
 
 
-static u32 ov6650_codes[] = {
-	MEDIA_BUS_FMT_YUYV8_2X8,
-	MEDIA_BUS_FMT_UYVY8_2X8,
-	MEDIA_BUS_FMT_YVYU8_2X8,
-	MEDIA_BUS_FMT_VYUY8_2X8,
-	MEDIA_BUS_FMT_SBGGR8_1X8,
-	MEDIA_BUS_FMT_Y8_1X8,
+static enum v4l2_mbus_pixelcode ov6650_codes[] = {
+	V4L2_MBUS_FMT_YUYV8_2X8,
+	V4L2_MBUS_FMT_UYVY8_2X8,
+	V4L2_MBUS_FMT_YVYU8_2X8,
+	V4L2_MBUS_FMT_VYUY8_2X8,
+	V4L2_MBUS_FMT_SBGGR8_1X8,
+	V4L2_MBUS_FMT_Y8_1X8,
 };
 
 /* read a register */
@@ -391,6 +390,16 @@ static int ov6550_s_ctrl(struct v4l2_ctrl *ctrl)
 	return -EINVAL;
 }
 
+/* Get chip identification */
+static int ov6650_g_chip_ident(struct v4l2_subdev *sd,
+				struct v4l2_dbg_chip_ident *id)
+{
+	id->ident	= V4L2_IDENT_OV6650;
+	id->revision	= 0;
+
+	return 0;
+}
+
 #ifdef CONFIG_VIDEO_ADV_DEBUG
 static int ov6650_get_register(struct v4l2_subdev *sd,
 				struct v4l2_dbg_register *reg)
@@ -412,7 +421,7 @@ static int ov6650_get_register(struct v4l2_subdev *sd,
 }
 
 static int ov6650_set_register(struct v4l2_subdev *sd,
-				const struct v4l2_dbg_register *reg)
+				struct v4l2_dbg_register *reg)
 {
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
 
@@ -426,10 +435,9 @@ static int ov6650_set_register(struct v4l2_subdev *sd,
 static int ov6650_s_power(struct v4l2_subdev *sd, int on)
 {
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
-	struct soc_camera_subdev_desc *ssdd = soc_camera_i2c_to_desc(client);
-	struct ov6650 *priv = to_ov6650(client);
+	struct soc_camera_link *icl = soc_camera_i2c_to_link(client);
 
-	return soc_camera_set_power(&client->dev, ssdd, priv->clk, on);
+	return soc_camera_set_power(&client->dev, icl, on);
 }
 
 static int ov6650_g_crop(struct v4l2_subdev *sd, struct v4l2_crop *a)
@@ -555,29 +563,29 @@ static int ov6650_s_fmt(struct v4l2_subdev *sd, struct v4l2_mbus_framefmt *mf)
 			.height	= mf->height << half_scale,
 		},
 	};
-	u32 code = mf->code;
+	enum v4l2_mbus_pixelcode code = mf->code;
 	unsigned long mclk, pclk;
 	u8 coma_set = 0, coma_mask = 0, coml_set, coml_mask, clkrc;
 	int ret;
 
 	/* select color matrix configuration for given color encoding */
 	switch (code) {
-	case MEDIA_BUS_FMT_Y8_1X8:
+	case V4L2_MBUS_FMT_Y8_1X8:
 		dev_dbg(&client->dev, "pixel format GREY8_1X8\n");
 		coma_mask |= COMA_RGB | COMA_WORD_SWAP | COMA_BYTE_SWAP;
 		coma_set |= COMA_BW;
 		break;
-	case MEDIA_BUS_FMT_YUYV8_2X8:
+	case V4L2_MBUS_FMT_YUYV8_2X8:
 		dev_dbg(&client->dev, "pixel format YUYV8_2X8_LE\n");
 		coma_mask |= COMA_RGB | COMA_BW | COMA_BYTE_SWAP;
 		coma_set |= COMA_WORD_SWAP;
 		break;
-	case MEDIA_BUS_FMT_YVYU8_2X8:
+	case V4L2_MBUS_FMT_YVYU8_2X8:
 		dev_dbg(&client->dev, "pixel format YVYU8_2X8_LE (untested)\n");
 		coma_mask |= COMA_RGB | COMA_BW | COMA_WORD_SWAP |
 				COMA_BYTE_SWAP;
 		break;
-	case MEDIA_BUS_FMT_UYVY8_2X8:
+	case V4L2_MBUS_FMT_UYVY8_2X8:
 		dev_dbg(&client->dev, "pixel format YUYV8_2X8_BE\n");
 		if (half_scale) {
 			coma_mask |= COMA_RGB | COMA_BW | COMA_WORD_SWAP;
@@ -587,7 +595,7 @@ static int ov6650_s_fmt(struct v4l2_subdev *sd, struct v4l2_mbus_framefmt *mf)
 			coma_set |= COMA_BYTE_SWAP | COMA_WORD_SWAP;
 		}
 		break;
-	case MEDIA_BUS_FMT_VYUY8_2X8:
+	case V4L2_MBUS_FMT_VYUY8_2X8:
 		dev_dbg(&client->dev, "pixel format YVYU8_2X8_BE (untested)\n");
 		if (half_scale) {
 			coma_mask |= COMA_RGB | COMA_BW;
@@ -597,7 +605,7 @@ static int ov6650_s_fmt(struct v4l2_subdev *sd, struct v4l2_mbus_framefmt *mf)
 			coma_set |= COMA_BYTE_SWAP;
 		}
 		break;
-	case MEDIA_BUS_FMT_SBGGR8_1X8:
+	case V4L2_MBUS_FMT_SBGGR8_1X8:
 		dev_dbg(&client->dev, "pixel format SBGGR8_1X8 (untested)\n");
 		coma_mask |= COMA_BW | COMA_BYTE_SWAP | COMA_WORD_SWAP;
 		coma_set |= COMA_RAW_RGB | COMA_RGB;
@@ -608,8 +616,8 @@ static int ov6650_s_fmt(struct v4l2_subdev *sd, struct v4l2_mbus_framefmt *mf)
 	}
 	priv->code = code;
 
-	if (code == MEDIA_BUS_FMT_Y8_1X8 ||
-			code == MEDIA_BUS_FMT_SBGGR8_1X8) {
+	if (code == V4L2_MBUS_FMT_Y8_1X8 ||
+			code == V4L2_MBUS_FMT_SBGGR8_1X8) {
 		coml_mask = COML_ONE_CHANNEL;
 		coml_set = 0;
 		priv->pclk_max = 4000000;
@@ -619,7 +627,7 @@ static int ov6650_s_fmt(struct v4l2_subdev *sd, struct v4l2_mbus_framefmt *mf)
 		priv->pclk_max = 8000000;
 	}
 
-	if (code == MEDIA_BUS_FMT_SBGGR8_1X8)
+	if (code == V4L2_MBUS_FMT_SBGGR8_1X8)
 		priv->colorspace = V4L2_COLORSPACE_SRGB;
 	else if (code != 0)
 		priv->colorspace = V4L2_COLORSPACE_JPEG;
@@ -697,18 +705,18 @@ static int ov6650_try_fmt(struct v4l2_subdev *sd,
 	mf->field = V4L2_FIELD_NONE;
 
 	switch (mf->code) {
-	case MEDIA_BUS_FMT_Y10_1X10:
-		mf->code = MEDIA_BUS_FMT_Y8_1X8;
-	case MEDIA_BUS_FMT_Y8_1X8:
-	case MEDIA_BUS_FMT_YVYU8_2X8:
-	case MEDIA_BUS_FMT_YUYV8_2X8:
-	case MEDIA_BUS_FMT_VYUY8_2X8:
-	case MEDIA_BUS_FMT_UYVY8_2X8:
+	case V4L2_MBUS_FMT_Y10_1X10:
+		mf->code = V4L2_MBUS_FMT_Y8_1X8;
+	case V4L2_MBUS_FMT_Y8_1X8:
+	case V4L2_MBUS_FMT_YVYU8_2X8:
+	case V4L2_MBUS_FMT_YUYV8_2X8:
+	case V4L2_MBUS_FMT_VYUY8_2X8:
+	case V4L2_MBUS_FMT_UYVY8_2X8:
 		mf->colorspace = V4L2_COLORSPACE_JPEG;
 		break;
 	default:
-		mf->code = MEDIA_BUS_FMT_SBGGR8_1X8;
-	case MEDIA_BUS_FMT_SBGGR8_1X8:
+		mf->code = V4L2_MBUS_FMT_SBGGR8_1X8;
+	case V4L2_MBUS_FMT_SBGGR8_1X8:
 		mf->colorspace = V4L2_COLORSPACE_SRGB;
 		break;
 	}
@@ -717,7 +725,7 @@ static int ov6650_try_fmt(struct v4l2_subdev *sd,
 }
 
 static int ov6650_enum_fmt(struct v4l2_subdev *sd, unsigned int index,
-			   u32 *code)
+			   enum v4l2_mbus_pixelcode *code)
 {
 	if (index >= ARRAY_SIZE(ov6650_codes))
 		return -EINVAL;
@@ -871,6 +879,7 @@ static const struct v4l2_ctrl_ops ov6550_ctrl_ops = {
 };
 
 static struct v4l2_subdev_core_ops ov6650_core_ops = {
+	.g_chip_ident		= ov6650_g_chip_ident,
 #ifdef CONFIG_VIDEO_ADV_DEBUG
 	.g_register		= ov6650_get_register,
 	.s_register		= ov6650_set_register,
@@ -883,7 +892,7 @@ static int ov6650_g_mbus_config(struct v4l2_subdev *sd,
 				struct v4l2_mbus_config *cfg)
 {
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
-	struct soc_camera_subdev_desc *ssdd = soc_camera_i2c_to_desc(client);
+	struct soc_camera_link *icl = soc_camera_i2c_to_link(client);
 
 	cfg->flags = V4L2_MBUS_MASTER |
 		V4L2_MBUS_PCLK_SAMPLE_RISING | V4L2_MBUS_PCLK_SAMPLE_FALLING |
@@ -891,7 +900,7 @@ static int ov6650_g_mbus_config(struct v4l2_subdev *sd,
 		V4L2_MBUS_VSYNC_ACTIVE_HIGH | V4L2_MBUS_VSYNC_ACTIVE_LOW |
 		V4L2_MBUS_DATA_ACTIVE_HIGH;
 	cfg->type = V4L2_MBUS_PARALLEL;
-	cfg->flags = soc_camera_apply_board_flags(ssdd, cfg);
+	cfg->flags = soc_camera_apply_board_flags(icl, cfg);
 
 	return 0;
 }
@@ -901,8 +910,8 @@ static int ov6650_s_mbus_config(struct v4l2_subdev *sd,
 				const struct v4l2_mbus_config *cfg)
 {
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
-	struct soc_camera_subdev_desc *ssdd = soc_camera_i2c_to_desc(client);
-	unsigned long flags = soc_camera_apply_board_flags(ssdd, cfg);
+	struct soc_camera_link *icl = soc_camera_i2c_to_link(client);
+	unsigned long flags = soc_camera_apply_board_flags(icl, cfg);
 	int ret;
 
 	if (flags & V4L2_MBUS_PCLK_SAMPLE_RISING)
@@ -954,15 +963,15 @@ static int ov6650_probe(struct i2c_client *client,
 			const struct i2c_device_id *did)
 {
 	struct ov6650 *priv;
-	struct soc_camera_subdev_desc *ssdd = soc_camera_i2c_to_desc(client);
+	struct soc_camera_link *icl = soc_camera_i2c_to_link(client);
 	int ret;
 
-	if (!ssdd) {
+	if (!icl) {
 		dev_err(&client->dev, "Missing platform_data for driver\n");
 		return -EINVAL;
 	}
 
-	priv = devm_kzalloc(&client->dev, sizeof(*priv), GFP_KERNEL);
+	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
 	if (!priv) {
 		dev_err(&client->dev,
 			"Failed to allocate memory for private data!\n");
@@ -1000,9 +1009,12 @@ static int ov6650_probe(struct i2c_client *client,
 			V4L2_CID_GAMMA, 0, 0xff, 1, 0x12);
 
 	priv->subdev.ctrl_handler = &priv->hdl;
-	if (priv->hdl.error)
-		return priv->hdl.error;
+	if (priv->hdl.error) {
+		int err = priv->hdl.error;
 
+		kfree(priv);
+		return err;
+	}
 	v4l2_ctrl_auto_cluster(2, &priv->autogain, 0, true);
 	v4l2_ctrl_auto_cluster(3, &priv->autowb, 0, true);
 	v4l2_ctrl_auto_cluster(2, &priv->autoexposure,
@@ -1013,20 +1025,13 @@ static int ov6650_probe(struct i2c_client *client,
 	priv->rect.width  = W_CIF;
 	priv->rect.height = H_CIF;
 	priv->half_scale  = false;
-	priv->code	  = MEDIA_BUS_FMT_YUYV8_2X8;
+	priv->code	  = V4L2_MBUS_FMT_YUYV8_2X8;
 	priv->colorspace  = V4L2_COLORSPACE_JPEG;
-
-	priv->clk = v4l2_clk_get(&client->dev, "mclk");
-	if (IS_ERR(priv->clk)) {
-		ret = PTR_ERR(priv->clk);
-		goto eclkget;
-	}
 
 	ret = ov6650_video_probe(client);
 	if (ret) {
-		v4l2_clk_put(priv->clk);
-eclkget:
 		v4l2_ctrl_handler_free(&priv->hdl);
+		kfree(priv);
 	}
 
 	return ret;
@@ -1036,9 +1041,9 @@ static int ov6650_remove(struct i2c_client *client)
 {
 	struct ov6650 *priv = to_ov6650(client);
 
-	v4l2_clk_put(priv->clk);
 	v4l2_device_unregister_subdev(&priv->subdev);
 	v4l2_ctrl_handler_free(&priv->hdl);
+	kfree(priv);
 	return 0;
 }
 

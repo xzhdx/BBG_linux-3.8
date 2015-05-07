@@ -39,8 +39,6 @@
 #include <linux/bitops.h>
 #include <linux/workqueue.h>
 #include <linux/of.h>
-#include <linux/of_address.h>
-#include <linux/of_irq.h>
 #include <linux/of_net.h>
 #include <linux/slab.h>
 
@@ -78,6 +76,13 @@ MODULE_DESCRIPTION(DRV_DESC);
 MODULE_AUTHOR
     ("Eugene Surovegin <eugene.surovegin@zultys.com> or <ebs@ebshome.net>");
 MODULE_LICENSE("GPL");
+
+/*
+ * PPC64 doesn't (yet) have a cacheable_memcpy
+ */
+#ifdef CONFIG_PPC64
+#define cacheable_memcpy(d,s,n) memcpy((d),(s),(n))
+#endif
 
 /* minimum number of free TX descriptors required to wake up TX process */
 #define EMAC_TX_WAKEUP_THRESH		(NUM_TX_BUFF / 4)
@@ -354,26 +359,10 @@ static int emac_reset(struct emac_instance *dev)
 	}
 
 #ifdef CONFIG_PPC_DCR_NATIVE
-	/*
-	 * PPC460EX/GT Embedded Processor Advanced User's Manual
-	 * section 28.10.1 Mode Register 0 (EMACx_MR0) states:
-	 * Note: The PHY must provide a TX Clk in order to perform a soft reset
-	 * of the EMAC. If none is present, select the internal clock
-	 * (SDR0_ETH_CFG[EMACx_PHY_CLK] = 1).
-	 * After a soft reset, select the external clock.
-	 */
-	if (emac_has_feature(dev, EMAC_FTR_460EX_PHY_CLK_FIX)) {
-		if (dev->phy_address == 0xffffffff &&
-		    dev->phy_map == 0xffffffff) {
-			/* No PHY: select internal loop clock before reset */
-			dcri_clrset(SDR0, SDR0_ETH_CFG,
-				    0, SDR0_ETH_CFG_ECS << dev->cell_index);
-		} else {
-			/* PHY present: select external clock before reset */
-			dcri_clrset(SDR0, SDR0_ETH_CFG,
-				    SDR0_ETH_CFG_ECS << dev->cell_index, 0);
-		}
-	}
+	/* Enable internal clock source */
+	if (emac_has_feature(dev, EMAC_FTR_460EX_PHY_CLK_FIX))
+		dcri_clrset(SDR0, SDR0_ETH_CFG,
+			    0, SDR0_ETH_CFG_ECS << dev->cell_index);
 #endif
 
 	out_be32(&p->mr0, EMAC_MR0_SRST);
@@ -381,14 +370,10 @@ static int emac_reset(struct emac_instance *dev)
 		--n;
 
 #ifdef CONFIG_PPC_DCR_NATIVE
-	if (emac_has_feature(dev, EMAC_FTR_460EX_PHY_CLK_FIX)) {
-		if (dev->phy_address == 0xffffffff &&
-		    dev->phy_map == 0xffffffff) {
-			/* No PHY: restore external clock source after reset */
-			dcri_clrset(SDR0, SDR0_ETH_CFG,
-				    SDR0_ETH_CFG_ECS << dev->cell_index, 0);
-		}
-	}
+	 /* Enable external clock source */
+	if (emac_has_feature(dev, EMAC_FTR_460EX_PHY_CLK_FIX))
+		dcri_clrset(SDR0, SDR0_ETH_CFG,
+			    SDR0_ETH_CFG_ECS << dev->cell_index, 0);
 #endif
 
 	if (n) {
@@ -1666,7 +1651,7 @@ static inline int emac_rx_sg_append(struct emac_instance *dev, int slot)
 			dev_kfree_skb(dev->rx_sg_skb);
 			dev->rx_sg_skb = NULL;
 		} else {
-			memcpy(skb_tail_pointer(dev->rx_sg_skb),
+			cacheable_memcpy(skb_tail_pointer(dev->rx_sg_skb),
 					 dev->rx_skb[slot]->data, len);
 			skb_put(dev->rx_sg_skb, len);
 			emac_recycle_rx_skb(dev, slot, len);
@@ -1723,7 +1708,8 @@ static int emac_poll_rx(void *param, int budget)
 				goto oom;
 
 			skb_reserve(copy_skb, EMAC_RX_SKB_HEADROOM + 2);
-			memcpy(copy_skb->data - 2, skb->data - 2, len + 2);
+			cacheable_memcpy(copy_skb->data - 2, skb->data - 2,
+					 len + 2);
 			emac_recycle_rx_skb(dev, slot, len);
 			skb = copy_skb;
 		} else if (unlikely(emac_alloc_rx_skb(dev, slot, GFP_ATOMIC)))
@@ -2204,10 +2190,11 @@ static void emac_ethtool_get_drvinfo(struct net_device *ndev,
 {
 	struct emac_instance *dev = netdev_priv(ndev);
 
-	strlcpy(info->driver, "ibm_emac", sizeof(info->driver));
-	strlcpy(info->version, DRV_VERSION, sizeof(info->version));
-	snprintf(info->bus_info, sizeof(info->bus_info), "PPC 4xx EMAC-%d %s",
-		 dev->cell_index, dev->ofdev->dev.of_node->full_name);
+	strcpy(info->driver, "ibm_emac");
+	strcpy(info->version, DRV_VERSION);
+	info->fw_version[0] = '\0';
+	sprintf(info->bus_info, "PPC 4xx EMAC-%d %s",
+		dev->cell_index, dev->ofdev->dev.of_node->full_name);
 	info->regdump_len = emac_ethtool_get_regs_len(ndev);
 }
 
@@ -2306,7 +2293,7 @@ static int emac_check_deps(struct emac_instance *dev,
 		if (deps[i].ofdev == NULL)
 			continue;
 		if (deps[i].drvdata == NULL)
-			deps[i].drvdata = platform_get_drvdata(deps[i].ofdev);
+			deps[i].drvdata = dev_get_drvdata(&deps[i].ofdev->dev);
 		if (deps[i].drvdata != NULL)
 			there++;
 	}
@@ -2315,11 +2302,16 @@ static int emac_check_deps(struct emac_instance *dev,
 
 static void emac_put_deps(struct emac_instance *dev)
 {
-	of_dev_put(dev->mal_dev);
-	of_dev_put(dev->zmii_dev);
-	of_dev_put(dev->rgmii_dev);
-	of_dev_put(dev->mdio_dev);
-	of_dev_put(dev->tah_dev);
+	if (dev->mal_dev)
+		of_dev_put(dev->mal_dev);
+	if (dev->zmii_dev)
+		of_dev_put(dev->zmii_dev);
+	if (dev->rgmii_dev)
+		of_dev_put(dev->rgmii_dev);
+	if (dev->mdio_dev)
+		of_dev_put(dev->mdio_dev);
+	if (dev->tah_dev)
+		of_dev_put(dev->tah_dev);
 }
 
 static int emac_of_bus_notify(struct notifier_block *nb, unsigned long action,
@@ -2358,8 +2350,9 @@ static int emac_wait_deps(struct emac_instance *dev)
 	bus_unregister_notifier(&platform_bus_type, &emac_of_bus_notifier);
 	err = emac_check_deps(dev, deps) ? 0 : -ENODEV;
 	for (i = 0; i < EMAC_DEP_COUNT; i++) {
-		of_node_put(deps[i].node);
-		if (err)
+		if (deps[i].node)
+			of_node_put(deps[i].node);
+		if (err && deps[i].ofdev)
 			of_dev_put(deps[i].ofdev);
 	}
 	if (err == 0) {
@@ -2369,7 +2362,8 @@ static int emac_wait_deps(struct emac_instance *dev)
 		dev->tah_dev = deps[EMAC_DEP_TAH_IDX].ofdev;
 		dev->mdio_dev = deps[EMAC_DEP_MDIO_IDX].ofdev;
 	}
-	of_dev_put(deps[EMAC_DEP_PREV_IDX].ofdev);
+	if (deps[EMAC_DEP_PREV_IDX].ofdev)
+		of_dev_put(deps[EMAC_DEP_PREV_IDX].ofdev);
 	return err;
 }
 
@@ -2663,7 +2657,7 @@ static int emac_init_config(struct emac_instance *dev)
 		       np->full_name);
 		return -ENXIO;
 	}
-	memcpy(dev->ndev->dev_addr, p, ETH_ALEN);
+	memcpy(dev->ndev->dev_addr, p, 6);
 
 	/* IAHT and GAHT filter parameterization */
 	if (emac_has_feature(dev, EMAC_FTR_EMAC4SYNC)) {
@@ -2786,9 +2780,9 @@ static int emac_probe(struct platform_device *ofdev)
 		/*  display more info about what's missing ? */
 		goto err_reg_unmap;
 	}
-	dev->mal = platform_get_drvdata(dev->mal_dev);
+	dev->mal = dev_get_drvdata(&dev->mal_dev->dev);
 	if (dev->mdio_dev != NULL)
-		dev->mdio_instance = platform_get_drvdata(dev->mdio_dev);
+		dev->mdio_instance = dev_get_drvdata(&dev->mdio_dev->dev);
 
 	/* Register with MAL */
 	dev->commac.ops = &emac_commac_ops;
@@ -2864,7 +2858,7 @@ static int emac_probe(struct platform_device *ofdev)
 		dev->commac.ops = &emac_commac_sg_ops;
 	} else
 		ndev->netdev_ops = &emac_netdev_ops;
-	ndev->ethtool_ops = &emac_ethtool_ops;
+	SET_ETHTOOL_OPS(ndev, &emac_ethtool_ops);
 
 	netif_carrier_off(ndev);
 
@@ -2879,7 +2873,7 @@ static int emac_probe(struct platform_device *ofdev)
 	 * fully initialized
 	 */
 	wmb();
-	platform_set_drvdata(ofdev, dev);
+	dev_set_drvdata(&ofdev->dev, dev);
 
 	/* There's a new kid in town ! Let's tell everybody */
 	wake_up_all(&emac_probe_wait);
@@ -2938,9 +2932,11 @@ static int emac_probe(struct platform_device *ofdev)
 
 static int emac_remove(struct platform_device *ofdev)
 {
-	struct emac_instance *dev = platform_get_drvdata(ofdev);
+	struct emac_instance *dev = dev_get_drvdata(&ofdev->dev);
 
 	DBG(dev, "remove" NL);
+
+	dev_set_drvdata(&ofdev->dev, NULL);
 
 	unregister_netdev(dev->ndev);
 
@@ -2973,7 +2969,7 @@ static int emac_remove(struct platform_device *ofdev)
 }
 
 /* XXX Features in here should be replaced by properties... */
-static const struct of_device_id emac_match[] =
+static struct of_device_id emac_match[] =
 {
 	{
 		.type		= "network",
@@ -2994,6 +2990,7 @@ MODULE_DEVICE_TABLE(of, emac_match);
 static struct platform_driver emac_driver = {
 	.driver = {
 		.name = "emac",
+		.owner = THIS_MODULE,
 		.of_match_table = emac_match,
 	},
 	.probe = emac_probe,
@@ -3097,7 +3094,8 @@ static void __exit emac_exit(void)
 
 	/* Destroy EMAC boot list */
 	for (i = 0; i < EMAC_BOOT_LIST_SIZE; i++)
-		of_node_put(emac_boot_list[i]);
+		if (emac_boot_list[i])
+			of_node_put(emac_boot_list[i]);
 }
 
 module_init(emac_init);

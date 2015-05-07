@@ -28,7 +28,7 @@
 #include <linux/videodev2.h>
 
 #include <media/soc_camera.h>
-#include <media/v4l2-clk.h>
+#include <media/v4l2-chip-ident.h>
 #include <media/v4l2-common.h>
 #include <media/v4l2-ctrls.h>
 
@@ -61,7 +61,7 @@ static const struct ov9640_reg ov9640_regs_dflt[] = {
 
 /* Configurations
  * NOTE: for YUV, alter the following registers:
- *		COM12 |= OV9640_COM12_YUV_AVG
+ * 		COM12 |= OV9640_COM12_YUV_AVG
  *
  *	 for RGB, alter the following registers:
  *		COM7  |= OV9640_COM7_RGB
@@ -159,10 +159,10 @@ static const struct ov9640_reg ov9640_regs_rgb[] = {
 	{ OV9640_MTXS,	0x65 },
 };
 
-static u32 ov9640_codes[] = {
-	MEDIA_BUS_FMT_UYVY8_2X8,
-	MEDIA_BUS_FMT_RGB555_2X8_PADHI_LE,
-	MEDIA_BUS_FMT_RGB565_2X8_LE,
+static enum v4l2_mbus_pixelcode ov9640_codes[] = {
+	V4L2_MBUS_FMT_UYVY8_2X8,
+	V4L2_MBUS_FMT_RGB555_2X8_PADHI_LE,
+	V4L2_MBUS_FMT_RGB565_2X8_LE,
 };
 
 /* read a register */
@@ -287,6 +287,18 @@ static int ov9640_s_ctrl(struct v4l2_ctrl *ctrl)
 	return -EINVAL;
 }
 
+/* Get chip identification */
+static int ov9640_g_chip_ident(struct v4l2_subdev *sd,
+				struct v4l2_dbg_chip_ident *id)
+{
+	struct ov9640_priv *priv = to_ov9640_sensor(sd);
+
+	id->ident	= priv->model;
+	id->revision	= priv->revision;
+
+	return 0;
+}
+
 #ifdef CONFIG_VIDEO_ADV_DEBUG
 static int ov9640_get_register(struct v4l2_subdev *sd,
 				struct v4l2_dbg_register *reg)
@@ -310,7 +322,7 @@ static int ov9640_get_register(struct v4l2_subdev *sd,
 }
 
 static int ov9640_set_register(struct v4l2_subdev *sd,
-				const struct v4l2_dbg_register *reg)
+				struct v4l2_dbg_register *reg)
 {
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
 
@@ -324,10 +336,9 @@ static int ov9640_set_register(struct v4l2_subdev *sd,
 static int ov9640_s_power(struct v4l2_subdev *sd, int on)
 {
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
-	struct soc_camera_subdev_desc *ssdd = soc_camera_i2c_to_desc(client);
-	struct ov9640_priv *priv = to_ov9640_sensor(sd);
+	struct soc_camera_link *icl = soc_camera_i2c_to_link(client);
 
-	return soc_camera_set_power(&client->dev, ssdd, priv->clk, on);
+	return soc_camera_set_power(&client->dev, icl, on);
 }
 
 /* select nearest higher resolution for capture */
@@ -351,32 +362,32 @@ static void ov9640_res_roundup(u32 *width, u32 *height)
 }
 
 /* Prepare necessary register changes depending on color encoding */
-static void ov9640_alter_regs(u32 code,
+static void ov9640_alter_regs(enum v4l2_mbus_pixelcode code,
 			      struct ov9640_reg_alt *alt)
 {
 	switch (code) {
 	default:
-	case MEDIA_BUS_FMT_UYVY8_2X8:
+	case V4L2_MBUS_FMT_UYVY8_2X8:
 		alt->com12	= OV9640_COM12_YUV_AVG;
 		alt->com13	= OV9640_COM13_Y_DELAY_EN |
 					OV9640_COM13_YUV_DLY(0x01);
 		break;
-	case MEDIA_BUS_FMT_RGB555_2X8_PADHI_LE:
+	case V4L2_MBUS_FMT_RGB555_2X8_PADHI_LE:
 		alt->com7	= OV9640_COM7_RGB;
 		alt->com13	= OV9640_COM13_RGB_AVG;
 		alt->com15	= OV9640_COM15_RGB_555;
 		break;
-	case MEDIA_BUS_FMT_RGB565_2X8_LE:
+	case V4L2_MBUS_FMT_RGB565_2X8_LE:
 		alt->com7	= OV9640_COM7_RGB;
 		alt->com13	= OV9640_COM13_RGB_AVG;
 		alt->com15	= OV9640_COM15_RGB_565;
 		break;
-	}
+	};
 }
 
 /* Setup registers according to resolution and color encoding */
 static int ov9640_write_regs(struct i2c_client *client, u32 width,
-		u32 code, struct ov9640_reg_alt *alts)
+		enum v4l2_mbus_pixelcode code, struct ov9640_reg_alt *alts)
 {
 	const struct ov9640_reg	*ov9640_regs, *matrix_regs;
 	int			ov9640_regs_len, matrix_regs_len;
@@ -419,7 +430,7 @@ static int ov9640_write_regs(struct i2c_client *client, u32 width,
 	}
 
 	/* select color matrix configuration for given color encoding */
-	if (code == MEDIA_BUS_FMT_UYVY8_2X8) {
+	if (code == V4L2_MBUS_FMT_UYVY8_2X8) {
 		matrix_regs	= ov9640_regs_yuv;
 		matrix_regs_len	= ARRAY_SIZE(ov9640_regs_yuv);
 	} else {
@@ -487,7 +498,7 @@ static int ov9640_s_fmt(struct v4l2_subdev *sd,
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
 	struct ov9640_reg_alt alts = {0};
 	enum v4l2_colorspace cspace;
-	u32 code = mf->code;
+	enum v4l2_mbus_pixelcode code = mf->code;
 	int ret;
 
 	ov9640_res_roundup(&mf->width, &mf->height);
@@ -500,13 +511,13 @@ static int ov9640_s_fmt(struct v4l2_subdev *sd,
 		return ret;
 
 	switch (code) {
-	case MEDIA_BUS_FMT_RGB555_2X8_PADHI_LE:
-	case MEDIA_BUS_FMT_RGB565_2X8_LE:
+	case V4L2_MBUS_FMT_RGB555_2X8_PADHI_LE:
+	case V4L2_MBUS_FMT_RGB565_2X8_LE:
 		cspace = V4L2_COLORSPACE_SRGB;
 		break;
 	default:
-		code = MEDIA_BUS_FMT_UYVY8_2X8;
-	case MEDIA_BUS_FMT_UYVY8_2X8:
+		code = V4L2_MBUS_FMT_UYVY8_2X8;
+	case V4L2_MBUS_FMT_UYVY8_2X8:
 		cspace = V4L2_COLORSPACE_JPEG;
 	}
 
@@ -527,13 +538,13 @@ static int ov9640_try_fmt(struct v4l2_subdev *sd,
 	mf->field = V4L2_FIELD_NONE;
 
 	switch (mf->code) {
-	case MEDIA_BUS_FMT_RGB555_2X8_PADHI_LE:
-	case MEDIA_BUS_FMT_RGB565_2X8_LE:
+	case V4L2_MBUS_FMT_RGB555_2X8_PADHI_LE:
+	case V4L2_MBUS_FMT_RGB565_2X8_LE:
 		mf->colorspace = V4L2_COLORSPACE_SRGB;
 		break;
 	default:
-		mf->code = MEDIA_BUS_FMT_UYVY8_2X8;
-	case MEDIA_BUS_FMT_UYVY8_2X8:
+		mf->code = V4L2_MBUS_FMT_UYVY8_2X8;
+	case V4L2_MBUS_FMT_UYVY8_2X8:
 		mf->colorspace = V4L2_COLORSPACE_JPEG;
 	}
 
@@ -541,7 +552,7 @@ static int ov9640_try_fmt(struct v4l2_subdev *sd,
 }
 
 static int ov9640_enum_fmt(struct v4l2_subdev *sd, unsigned int index,
-			   u32 *code)
+			   enum v4l2_mbus_pixelcode *code)
 {
 	if (index >= ARRAY_SIZE(ov9640_codes))
 		return -EINVAL;
@@ -604,10 +615,12 @@ static int ov9640_video_probe(struct i2c_client *client)
 	switch (VERSION(pid, ver)) {
 	case OV9640_V2:
 		devname		= "ov9640";
+		priv->model	= V4L2_IDENT_OV9640;
 		priv->revision	= 2;
 		break;
 	case OV9640_V3:
 		devname		= "ov9640";
+		priv->model	= V4L2_IDENT_OV9640;
 		priv->revision	= 3;
 		break;
 	default:
@@ -631,6 +644,7 @@ static const struct v4l2_ctrl_ops ov9640_ctrl_ops = {
 };
 
 static struct v4l2_subdev_core_ops ov9640_core_ops = {
+	.g_chip_ident		= ov9640_g_chip_ident,
 #ifdef CONFIG_VIDEO_ADV_DEBUG
 	.g_register		= ov9640_get_register,
 	.s_register		= ov9640_set_register,
@@ -643,13 +657,13 @@ static int ov9640_g_mbus_config(struct v4l2_subdev *sd,
 				struct v4l2_mbus_config *cfg)
 {
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
-	struct soc_camera_subdev_desc *ssdd = soc_camera_i2c_to_desc(client);
+	struct soc_camera_link *icl = soc_camera_i2c_to_link(client);
 
 	cfg->flags = V4L2_MBUS_PCLK_SAMPLE_RISING | V4L2_MBUS_MASTER |
 		V4L2_MBUS_VSYNC_ACTIVE_HIGH | V4L2_MBUS_HSYNC_ACTIVE_HIGH |
 		V4L2_MBUS_DATA_ACTIVE_HIGH;
 	cfg->type = V4L2_MBUS_PARALLEL;
-	cfg->flags = soc_camera_apply_board_flags(ssdd, cfg);
+	cfg->flags = soc_camera_apply_board_flags(icl, cfg);
 
 	return 0;
 }
@@ -676,15 +690,15 @@ static int ov9640_probe(struct i2c_client *client,
 			const struct i2c_device_id *did)
 {
 	struct ov9640_priv *priv;
-	struct soc_camera_subdev_desc *ssdd = soc_camera_i2c_to_desc(client);
+	struct soc_camera_link *icl = soc_camera_i2c_to_link(client);
 	int ret;
 
-	if (!ssdd) {
+	if (!icl) {
 		dev_err(&client->dev, "Missing platform_data for driver\n");
 		return -EINVAL;
 	}
 
-	priv = devm_kzalloc(&client->dev, sizeof(struct ov9640_priv), GFP_KERNEL);
+	priv = kzalloc(sizeof(struct ov9640_priv), GFP_KERNEL);
 	if (!priv) {
 		dev_err(&client->dev,
 			"Failed to allocate memory for private data!\n");
@@ -699,20 +713,18 @@ static int ov9640_probe(struct i2c_client *client,
 	v4l2_ctrl_new_std(&priv->hdl, &ov9640_ctrl_ops,
 			V4L2_CID_HFLIP, 0, 1, 1, 0);
 	priv->subdev.ctrl_handler = &priv->hdl;
-	if (priv->hdl.error)
-		return priv->hdl.error;
+	if (priv->hdl.error) {
+		int err = priv->hdl.error;
 
-	priv->clk = v4l2_clk_get(&client->dev, "mclk");
-	if (IS_ERR(priv->clk)) {
-		ret = PTR_ERR(priv->clk);
-		goto eclkget;
+		kfree(priv);
+		return err;
 	}
 
 	ret = ov9640_video_probe(client);
+
 	if (ret) {
-		v4l2_clk_put(priv->clk);
-eclkget:
 		v4l2_ctrl_handler_free(&priv->hdl);
+		kfree(priv);
 	}
 
 	return ret;
@@ -723,9 +735,9 @@ static int ov9640_remove(struct i2c_client *client)
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
 	struct ov9640_priv *priv = to_ov9640_sensor(sd);
 
-	v4l2_clk_put(priv->clk);
 	v4l2_device_unregister_subdev(&priv->subdev);
 	v4l2_ctrl_handler_free(&priv->hdl);
+	kfree(priv);
 	return 0;
 }
 
